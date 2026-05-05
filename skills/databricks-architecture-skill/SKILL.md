@@ -1,9 +1,9 @@
 ---
 name: databricks-architecture
 description: >
-  Classifies the app type (frontend-only, full-stack, migration), shapes the
-  architecture for Databricks/Lakebase integration, and orchestrates which
-  implementation skills to invoke next.
+  Classifies the app type (frontend-only, full-stack, script/notebook,
+  migration), shapes the architecture for Databricks/Lakebase integration,
+  and orchestrates which implementation skills to invoke next.
   TRIGGER when: user mentions Databricks or Lakebase as a data source; user
   wants to integrate with Databricks; planning any new app that includes
   Databricks; user says "migrate to Databricks/Lakebase"; DATABRICKS_HOST or
@@ -14,7 +14,7 @@ description: >
   first before any other Databricks skill.
   SKIP: user is working with a non-Databricks database only (Postgres, MySQL,
   MongoDB) with no Databricks involvement.
-version: 1.0.0
+version: 2.0.0
 tags: [databricks, lakebase, architecture, migration]
 ---
 
@@ -22,45 +22,14 @@ tags: [databricks, lakebase, architecture, migration]
 
 ## Purpose
 
-Shape the architecture before any code is written. Always run this skill first.
-After classification, invoke the appropriate follow-up skills in order.
-
----
-
-## Step 0 — Finding Lakebase Credentials
-
-Guide the user to find credentials in the Databricks workspace UI.
-
-### Navigation path
-
-1. Log in to your Databricks workspace
-2. Click the **grid icon (⋮⋮⋮)** in the **top-right corner** (app-switcher)
-3. Click **Lakebase Postgres** from the dropdown
-4. Select your project → click **Connect** (top-right)
-5. In the Connect dialog, configure the dropdowns: **Branch**, **Compute**, **Database**, **Role**
-6. Copy the connection details:
-
-| What | How |
-|---|---|
-| **Connection string** | Shown in the dialog — format: `postgresql://USER@HOST/DB?sslmode=require` |
-| **Host** | Extract from the connection string (e.g. `ep-abc-123.ap-southeast-1.cloud.databricks.com`) |
-| **Database** | Extract from the connection string (e.g. `databricks_postgres`) |
-| **User / Role** | Extract from the connection string (e.g. `your_role_name`) |
-| **OAuth token** | Click **"Copy OAuth token"** — this is your password (expires in ~1 hour) |
-
-> **Note:** There is no "Generate password" button. The password is an OAuth token stored in a
-> secure vault that expires after ~1 hour — which is why automatic token rotation (covered in
-> `databricks-security`) is mandatory. Never hardcode this token.
-
-### Official docs
-- https://docs.databricks.com/aws/en/oltp/projects/postgres-clients
-- https://docs.databricks.com/aws/en/oltp/
+Classify the app and shape the architecture before any code is written.
+Always run this skill first. After classification, invoke follow-up skills in order.
 
 ---
 
 ## Step 1 — Classify the App
 
-Determine which category applies before generating any code.
+Determine which category applies. Ask if ambiguous.
 
 **Frontend-only signals:**
 - Pure SPA (React, Vue, Angular, Svelte) with no server files
@@ -73,57 +42,186 @@ Determine which category applies before generating any code.
 - Database migrations exist
 - `api/` routes or server-side rendering
 
+**Script / Notebook signals:**
+- Standalone Python script, Jupyter notebook, or data pipeline
+- No web framework or server
+- Batch jobs, ETL, ML training, data analysis
+
 **Migration signals:**
 - Existing `DATABASE_URL` pointing to a non-Databricks host
 - Existing ORM models, migrations, or schema files for another database
-- References to PostgreSQL, MySQL, or other databases in config files
 - User mentions "migrate", "move", or "switch" to Databricks/Lakebase
+
+If ambiguous, ask:
+
+> "Is this a browser-based app (no backend server), a server-side backend,
+> or a standalone script / notebook?"
 
 If migration signals detected, ask:
 
 > "Are you migrating an existing application to Lakebase? If yes, share your
-> current database config (without credentials) so I can plan the migration
-> path and adapt your existing connection code."
+> current database config (without credentials) so I can plan the migration path."
 
-If classification is ambiguous, ask:
+**Also ask the tech stack** to pre-populate the project marker:
 
-> "Is this app frontend-only (no backend server at all), or does it have a
-> backend component that runs server-side code?"
+> "Which language/framework are you using?
+> 1. TypeScript / Node.js (React, Next.js, Express, etc.)
+> 2. Python (FastAPI, Django, Flask, script, notebook)
+> 3. Java / Kotlin (Spring Boot, JDBC)
+> 4. Other — describe briefly"
 
 ---
 
 ## Step 1.5 — Write Project Marker
 
-After classification, create the `.lakebase` marker file in the project root:
+After classification and stack identification, create `.lakebase` in the project root:
 
 ```bash
-echo '{"app_type":"CLASSIFIED_TYPE"}' > .lakebase
+echo '{"app_type":"CLASSIFIED_TYPE","stack":"STACK"}' > .lakebase
 ```
 
-Replace `CLASSIFIED_TYPE` with the actual value: `frontend`, `fullstack`, or `migration`.
+| Field | Values |
+|---|---|
+| `app_type` | `frontend`, `fullstack`, `script`, `migration` |
+| `stack` | `typescript`, `python`, `java`, `kotlin` |
 
-This file scopes all Databricks hooks to this project — hooks will not fire in non-Databricks projects that happen to mention Databricks keywords.
+This file:
+- Scopes hooks to confirmed Databricks projects (prevents false positives)
+- Records app type so the transition hook can detect frontend → fullstack changes
+- Lets downstream skills skip classification questions
 
 ---
 
-## Step 2 — Orchestrate Follow-up Skills
+## Step 2 — Credential Navigation
 
-After classification, invoke skills in this order:
+Guide the user to the credentials they need for their specific path.
 
-**Frontend-only path:**
-1. Invoke `databricks-connection` — Data API client setup
-2. Invoke `databricks-security` — OAuth PKCE + silent refresh
-3. Invoke `databricks-data-patterns` — PostgREST read/write patterns
+### Frontend path — Data API URL + OAuth App
+
+The frontend uses the Lakebase **Data API** (PostgREST), not direct PostgreSQL.
+
+**Data API base URL:**
+1. Log in to Databricks workspace
+2. Navigate to **Lakebase Postgres** → select your project
+3. Click **Data API** tab → copy the base URL
+
+Format:
+```
+https://your-workspace.databricks.com/api/2.0/lakebase/v1/projects/PROJECT_ID/data-api
+```
+
+**OAuth App registration (requires workspace admin):**
+The frontend uses PKCE OAuth. An OAuth application must be registered in the workspace.
+If you don't have admin access, share this with your workspace admin:
+
+> "Please register an OAuth application in Workspace Settings → Security → OAuth Applications:
+> - Name: `your-app-name`
+> - Redirect URIs: `http://localhost:5173/auth/callback` (add production URI too)
+> - Grant types: `Authorization Code`
+> - Return the **Client ID** to the developer — no client secret is needed for PKCE."
+
+Add to `.env.local`:
+```env
+VITE_DATABRICKS_HOST=https://your-workspace.databricks.com
+VITE_DATABRICKS_CLIENT_ID=<from OAuth app registration>
+VITE_OAUTH_REDIRECT_URI=http://localhost:5173/auth/callback
+VITE_DATA_API_BASE_URL=https://your-workspace.databricks.com/api/2.0/lakebase/v1/projects/PROJECT_ID/data-api
+```
+
+---
+
+### Full-stack / Script path — PostgreSQL Connection + SDK Credentials
+
+**PostgreSQL connection details (from Lakebase UI):**
+1. Log in to Databricks workspace
+2. Click **grid icon (⋮⋮⋮)** top-right → **Lakebase Postgres**
+3. Select project → click **Connect** (top-right)
+4. Configure: **Branch**, **Compute**, **Database**, **Role**
+5. Copy connection details:
+
+| What | Where |
+|---|---|
+| **Host** | Extract from connection string, e.g. `ep-abc-123.ap-southeast-1.cloud.databricks.com` |
+| **Database** | Extract from connection string, e.g. `databricks_postgres` |
+| **User / Role** | Extract from connection string |
+| **Endpoint path** | Format: `projects/{name}/branches/{branch}/endpoints/{endpoint}` |
+
+> The password is a **short-lived OAuth token** (~1 hour) — never hardcode it.
+> Token rotation is mandatory and set up by `databricks-security`.
+
+**SDK credentials** (choose one):
+
+| Mode | Env vars | Best for |
+|---|---|---|
+| PAT (Personal Access Token) | `DATABRICKS_TOKEN` | Dev / personal use |
+| M2M Service Principal | `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` | Production — requires admin |
+
+**Finding your endpoint path:**
+```python
+from databricks.sdk import WorkspaceClient
+w = WorkspaceClient()
+for p in w.postgres.list_projects():
+    print(p.name)
+for b in w.postgres.list_branches(parent='projects/my-project'):
+    print(b.name)
+for e in w.postgres.list_endpoints(parent='projects/my-project/branches/production'):
+    print(e.name)  # typically 'primary'
+```
+
+**PAT setup (Databricks UI):**
+1. User Settings → Developer → Access tokens → **Generate new token**
+2. Scope: `Other APIs` → API scope(s): **`postgres`** (not `sql` — wrong scope)
+3. Lifetime: 90 days for dev; use M2M for production
+
+**M2M service principal (requires workspace admin):**
+Share this with your admin if you don't have access:
+
+> "Please create a service principal for Lakebase access:
+> 1. Settings → Identity & Access → Service principals → **Add service principal**
+> 2. Generate a secret (shown once — save it immediately)
+> 3. Assign the service principal `Can use` permission on the Lakebase project
+> 4. Return the **Client ID** and **Client Secret** to the developer."
+
+Add to `.env`:
+```env
+DATABRICKS_HOST=https://your-workspace.databricks.com
+DATABRICKS_TOKEN=<PAT>               # dev only
+# OR for production:
+DATABRICKS_CLIENT_ID=<from admin>
+DATABRICKS_CLIENT_SECRET=<from admin>
+
+LAKEBASE_HOST=ep-abc-123.databricks.com
+LAKEBASE_PORT=5432
+LAKEBASE_DB=databricks_postgres
+LAKEBASE_USER=your_role_name
+LAKEBASE_ENDPOINT_PATH=projects/my-project/branches/production/endpoints/primary
+DATABASE_URL=postgresql://your_role_name@ep-abc-123.databricks.com/databricks_postgres?sslmode=require
+```
+
+---
+
+## Step 3 — Orchestrate Follow-up Skills
+
+**Frontend path:**
+1. `databricks-connection` — Data API client setup
+2. `databricks-security` — PKCE login flow + silent refresh
+3. `databricks-data-patterns` — PostgREST read/write patterns
 
 **Full-stack path:**
-1. Invoke `databricks-connection` — PostgreSQL connection setup (ask: driver or ORM?)
-2. Invoke `databricks-security` — OAuth token rotation (mandatory)
-3. Invoke `databricks-data-patterns` — query, write, and transaction patterns
+1. `databricks-connection` — PostgreSQL driver or ORM
+2. `databricks-security` — token rotation (mandatory)
+3. `databricks-data-patterns` — typed query modules
+
+**Script / Notebook path:**
+1. `databricks-connection` — psycopg2 or asyncpg connection
+2. `databricks-security` — token rotation
+3. `databricks-data-patterns` — query patterns (skip pagination if batch-oriented)
 
 **Migration path:**
-1. Assess existing connection code, map it to Lakebase equivalent
-2. Identify schema or driver changes needed
-3. Follow frontend-only or full-stack path above
+1. Assess existing connection code and ORM models
+2. Map existing schema to Lakebase equivalent
+3. Follow full-stack path above for connection + security
+4. Adapt existing query modules using `databricks-data-patterns`
 
 ---
 
@@ -133,28 +231,26 @@ After classification, invoke skills in this order:
 User wants Databricks/Lakebase integration
           │
           ├─ Migration? (existing DB signals)
-          │         └─ Ask: share current DB config (no credentials)
-          │                   └─ Map existing → Lakebase, then continue ↓
+          │         └─ Map existing → Lakebase → follow fullstack path
           │
           ├─ Frontend only? (SPA, no server-side code)
-          │         └─ Path: Lakebase Data API (PostgREST)
-          │                   └─ Skills: connection → security → data-patterns
+          │         └─ Data API (PostgREST) + PKCE OAuth
           │
-          └─ Has a backend?
-                    └─ Path: Direct Lakebase PostgreSQL (OAuth always)
-                              └─ Skills: connection → security → data-patterns
+          ├─ Has a backend?
+          │         └─ Direct PostgreSQL (OAuth token rotation)
+          │
+          └─ Script / Notebook?
+                    └─ Direct PostgreSQL (OAuth token rotation, no pooling)
 ```
 
 ---
 
 ## Handoff
 
-After classification and any clarifying questions are resolved, present this
-prompt to the user verbatim before invoking `databricks-connection`:
+After credential guidance is done, present this verbatim:
 
 > "Architecture classified. Ready to set up the **connection layer** next —
-> this generates the Lakebase PostgreSQL connection code and environment
-> variables for your stack. Want to continue?"
+> this generates the Lakebase connection code and environment variables for
+> your stack. Want to continue?"
 
 If the user confirms, invoke `databricks-connection` immediately.
-If they decline, summarise what will need to be done manually.
