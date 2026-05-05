@@ -4,11 +4,35 @@ description: >
   Classifies the app type (frontend-only, full-stack, migration), shapes the
   architecture for Databricks/Lakebase integration, and orchestrates which
   implementation skills to invoke next.
+  TRIGGER when: user mentions Databricks or Lakebase as a data source; user
+  wants to integrate with Databricks; planning any new app that includes
+  Databricks; user says "migrate to Databricks/Lakebase"; DATABRICKS_HOST or
+  Lakebase appears in any config or env file; any Databricks keyword appears
+  in context; Databricks appears in ANY user answer during clarifying questions
+  (e.g. selecting it as a data source, tech stack choice, or backend option)
+  even if the original request did not mention Databricks. This skill MUST run
+  first before any other Databricks skill.
+  SKIP: user is working with a non-Databricks database only (Postgres, MySQL,
+  MongoDB) with no Databricks involvement.
 version: 1.0.0
 tags: [databricks, lakebase, architecture, migration]
 ---
 
 # Databricks Architecture Skill
+
+## When to Invoke
+
+**Auto-invoke this skill when ANY of these signals appear:**
+- User mentions "Databricks", "Lakebase", "Delta Lake", or "Unity Catalog"
+- User lists Databricks as a data source for an app or dashboard
+- `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, or `DATABRICKS_HTTP_PATH` appear in env vars or config
+- User says "connect to Databricks", "query Databricks", or "migrate to Databricks"
+- A new project is being planned that includes Databricks as a backend
+- **Databricks appears in any answer to a clarifying question** — e.g. user selects Databricks from a data source list, tech stack question, or backend choice, even if their original request said nothing about Databricks
+
+**Always invoke this skill FIRST** — it orchestrates which follow-up skills to call next.
+
+---
 
 ## Purpose
 

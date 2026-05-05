@@ -4,11 +4,31 @@ description: >
   Generates connection boilerplate for Databricks Lakebase — Data API client
   for frontend apps, direct PostgreSQL connection for backends (OAuth only).
   Asks one question (driver vs ORM) for backend path.
+  TRIGGER when: databricks-architecture has classified the app type; user needs
+  Databricks/Lakebase connection code; user asks how to connect to Databricks;
+  writing any db connection file that targets Databricks or Lakebase; env vars
+  DATABRICKS_HOST, LAKEBASE_HOST, or DATABRICKS_HTTP_PATH are being configured;
+  user asks about Databricks SQL warehouse or Lakebase PostgreSQL endpoint.
+  SKIP: databricks-architecture has not yet run — invoke that first.
 version: 2.0.0
 tags: [databricks, lakebase, postgresql, data-api, connection, oauth]
 ---
 
 # Databricks Connection Skill
+
+## When to Invoke
+
+**Auto-invoke this skill when ANY of these signals appear:**
+- `databricks-architecture` has just classified the app type
+- User needs connection boilerplate for Databricks or Lakebase
+- Env vars `DATABRICKS_HOST`, `LAKEBASE_HOST`, `DATABRICKS_HTTP_PATH`, or `DATABRICKS_TOKEN` are being set up
+- User asks "how do I connect to Databricks?" or "how do I connect to Lakebase?"
+- Writing a database connection file (`db/connection.ts`, `lib/db.ts`, etc.) that targets Databricks
+- User asks about SQL warehouse endpoints or Lakebase PostgreSQL
+
+**Invoke order**: `databricks-architecture` → **`databricks-connection`** → `databricks-security` → `databricks-data-patterns`
+
+---
 
 ## Purpose
 

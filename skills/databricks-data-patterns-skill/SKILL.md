@@ -4,11 +4,31 @@ description: >
   Read and write patterns for Databricks Lakebase — PostgREST query patterns
   for the Data API (frontend), parameterized queries, transactions, pagination,
   batch operations, and error handling for direct PostgreSQL backends.
+  TRIGGER when: databricks-connection and databricks-security are set up;
+  writing any SQL query, read, write, upsert, delete, or transaction against
+  Databricks/Lakebase; user asks how to query Databricks data; building data
+  fetching logic that targets Databricks or Lakebase; implementing pagination,
+  batch operations, or error handling for Databricks queries.
+  SKIP: connection and security layers not yet in place — invoke those first.
 version: 1.0.0
 tags: [databricks, lakebase, read, write, patterns, queries, postgrest]
 ---
 
 # Databricks Data Patterns Skill
+
+## When to Invoke
+
+**Auto-invoke this skill when ANY of these signals appear:**
+- `databricks-connection` and `databricks-security` are already set up
+- Writing SQL queries, reads, writes, upserts, or deletes against Databricks/Lakebase
+- User asks "how do I query Databricks?" or "how do I read/write Lakebase data?"
+- Building data-fetching hooks, API routes, or server actions that hit Databricks
+- Implementing pagination, batch inserts, transactions, or bulk loads for Databricks
+- Handling errors from Databricks SQL or Lakebase Data API responses
+
+**Invoke order**: `databricks-architecture` → `databricks-connection` → `databricks-security` → **`databricks-data-patterns`**
+
+---
 
 ## Purpose
 

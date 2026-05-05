@@ -4,11 +4,32 @@ description: >
   Security patterns for Databricks/Lakebase: frontend OAuth PKCE silent
   refresh, mandatory backend token rotation, secret management rules, and
   pre-completion security checklist.
+  TRIGGER when: databricks-connection has been set up; writing any auth,
+  token, or credential code for Databricks/Lakebase; user asks about
+  Databricks OAuth, token expiry, or token rotation; DATABRICKS_TOKEN or
+  OAuth appears in Databricks context; any Databricks connection file is
+  being written or reviewed; before marking any Databricks integration complete.
+  SKIP: connection layer has not been set up yet — invoke databricks-connection
+  first.
 version: 1.0.0
 tags: [databricks, lakebase, security, oauth, token-rotation]
 ---
 
 # Databricks Security Skill
+
+## When to Invoke
+
+**Auto-invoke this skill when ANY of these signals appear:**
+- `databricks-connection` has just generated connection boilerplate
+- Writing or reviewing auth/token code for Databricks or Lakebase
+- User asks about OAuth, token expiry, token rotation, or session refresh
+- `DATABRICKS_TOKEN` or OAuth flow appears in any Databricks context
+- Any file storing Databricks credentials is being created
+- Pre-completion checklist needed for a Databricks integration
+
+**Invoke order**: `databricks-architecture` → `databricks-connection` → **`databricks-security`** → `databricks-data-patterns`
+
+---
 
 ## Purpose
 
