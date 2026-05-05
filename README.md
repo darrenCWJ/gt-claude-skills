@@ -11,7 +11,7 @@ GovTech's Claude Code skills collection. Install once to get all skills — upda
 ## Install
 
 ```bash
-claude plugin install https://github.com/<your-username>/gt-claude-skills
+claude plugin install https://github.com/darrenCWJ/gt-claude-skills
 ```
 
 ## Update
