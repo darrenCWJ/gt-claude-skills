@@ -1,0 +1,8 @@
+{
+  "name": "databricks-connection-skill",
+  "description": "Best-practice patterns for connecting applications to Databricks Lakebase. Routes frontend-only apps to the PostgREST-compatible Data API and full-stack apps to direct Lakebase PostgreSQL connections.",
+  "author": {
+    "name": "Darren Chua",
+    "email": ""
+  }
+}
