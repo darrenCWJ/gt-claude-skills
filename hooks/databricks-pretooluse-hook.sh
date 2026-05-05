@@ -5,7 +5,18 @@
 
 input=$(cat)
 
-if [ ! -f ".lakebase" ]; then
+# Walk up the directory tree to find .lakebase (handles CWD != project root)
+lakebase_path=""
+dir="$PWD"
+while [ "$dir" != "/" ]; do
+  if [ -f "$dir/.lakebase" ]; then
+    lakebase_path="$dir/.lakebase"
+    break
+  fi
+  dir="$(dirname "$dir")"
+done
+
+if [ -z "$lakebase_path" ]; then
   exit 0
 fi
 
@@ -37,14 +48,15 @@ except Exception:
 app_type=$(python3 -c "
 import json
 try:
-    with open('.lakebase') as f:
+    with open('$lakebase_path') as f:
         print(json.load(f).get('app_type', ''))
 except Exception:
     print('')
 " 2>/dev/null)
 
 if [[ "$app_type" == "frontend" ]]; then
-  if echo "$file_path" | grep -qiE "(^|/)((server|app|main|index)\.(ts|js|py|go)|Dockerfile|wsgi\.py|asgi\.py|manage\.py)$"; then
+  # Broadened to cover more real-world backend entrypoint names
+  if echo "$file_path" | grep -qiE "(^|/)((server|app|main|index|application|run|start|handler|function|api|routes|worker)\.(ts|js|mts|mjs|py|go)|Dockerfile(\..*)?|wsgi\.py|asgi\.py|manage\.py|lambda_function\.py|serverless\.yml)$"; then
     printf "App type transition detected: .lakebase says 'frontend' but you are writing a backend entrypoint (%s).\n" "$file_path"
     printf "Re-run the 'databricks-architecture' skill to reclassify this project before continuing.\n"
     exit 0
