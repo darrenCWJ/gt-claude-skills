@@ -16,20 +16,6 @@ tags: [databricks, lakebase, postgresql, data-api, connection, oauth]
 
 # Databricks Connection Skill
 
-## When to Invoke
-
-**Auto-invoke this skill when ANY of these signals appear:**
-- `databricks-architecture` has just classified the app type
-- User needs connection boilerplate for Databricks or Lakebase
-- Env vars `LAKEBASE_HOST`, `LAKEBASE_DB`, `LAKEBASE_USER`, or `LAKEBASE_OAUTH_TOKEN` are being set up
-- User asks "how do I connect to Databricks?" or "how do I connect to Lakebase?"
-- Writing a database connection file (`db/connection.ts`, `lib/db.ts`, etc.) that targets Lakebase
-- User asks about Lakebase PostgreSQL endpoints
-
-**Invoke order**: `databricks-architecture` → **`databricks-connection`** → `databricks-security` → `databricks-data-patterns`
-
----
-
 ## Purpose
 
 Generate the connection layer only. Run after `databricks-architecture` has

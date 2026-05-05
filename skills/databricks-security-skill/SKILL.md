@@ -17,20 +17,6 @@ tags: [databricks, lakebase, security, oauth, token-rotation]
 
 # Databricks Security Skill
 
-## When to Invoke
-
-**Auto-invoke this skill when ANY of these signals appear:**
-- `databricks-connection` has just generated connection boilerplate
-- Writing or reviewing auth/token code for Databricks or Lakebase
-- User asks about OAuth, token expiry, token rotation, or session refresh
-- `DATABRICKS_TOKEN` or OAuth flow appears in any Databricks context
-- Any file storing Databricks credentials is being created
-- Pre-completion checklist needed for a Databricks integration
-
-**Invoke order**: `databricks-architecture` → `databricks-connection` → **`databricks-security`** → `databricks-data-patterns`
-
----
-
 ## Purpose
 
 Apply security patterns after connection setup. Covers token rotation for both

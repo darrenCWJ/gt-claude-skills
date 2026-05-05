@@ -1,17 +1,15 @@
 #!/bin/bash
 # Detects Databricks/Lakebase references in code Claude is about to write.
-# Checks granular setup state and triggers the relevant skill(s) for any
-# incomplete component that matches the code being written.
+# Checks granular setup state and triggers relevant skill(s) for incomplete steps.
+# Silent when all setup steps are complete. Resets on reboot or manual: rm /tmp/databricks-state.json
 
 STATE_FILE="/tmp/databricks-state.json"
-TTL=7200  # 2 hours
 
 read_state() {
   python3 -c "
 import json, time
 
 STATE_FILE = '$STATE_FILE'
-TTL = $TTL
 defaults = {
     'architecture_classified': False,
     'connection_configured': False,
@@ -23,8 +21,6 @@ defaults = {
 try:
     with open(STATE_FILE) as f:
         s = json.load(f)
-    if int(time.time()) - s.get('last_updated', 0) >= TTL:
-        raise ValueError('expired')
     print(json.dumps(s))
 except Exception:
     with open(STATE_FILE, 'w') as f:
@@ -66,6 +62,23 @@ if ! echo "$content" | grep -qiE "databricks|lakebase|dbutils|dbfs:|DeltaTable|d
 fi
 
 state=$(read_state)
+
+# All steps complete — stay silent
+all_complete=$(echo "$state" | python3 -c "
+import json, sys
+s = json.load(sys.stdin)
+done = all([
+    s.get('architecture_classified', False),
+    s.get('connection_configured', False),
+    s.get('security_checklist_done', False),
+    s.get('data_patterns_applied', False),
+])
+print('True' if done else 'False')
+" 2>/dev/null)
+
+if [ "$all_complete" = "True" ]; then
+  exit 0
+fi
 
 conn=$(echo "$state" | python3 -c "import json,sys; print(json.load(sys.stdin).get('connection_configured', False))" 2>/dev/null)
 sec=$(echo "$state" | python3 -c "import json,sys; print(json.load(sys.stdin).get('security_checklist_done', False))" 2>/dev/null)

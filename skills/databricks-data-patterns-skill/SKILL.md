@@ -1,288 +1,234 @@
 ---
 name: databricks-data-patterns
 description: >
-  Read and write patterns for Databricks Lakebase — PostgREST query patterns
-  for the Data API (frontend), parameterized queries, transactions, pagination,
-  batch operations, and error handling for direct PostgreSQL backends.
-  TRIGGER when: databricks-connection and databricks-security are set up;
-  writing any SQL query, read, write, upsert, delete, or transaction against
-  Databricks/Lakebase; user asks how to query Databricks data; building data
-  fetching logic that targets Databricks or Lakebase; implementing pagination,
-  batch operations, or error handling for Databricks queries.
+  Generates project-specific query modules for Databricks Lakebase after
+  connection and security are in place. Discovers entities, asks about required
+  operations, then writes typed query files using real table names.
+  TRIGGER when: databricks-connection and databricks-security are complete;
+  user is ready to write data access code against Lakebase.
   SKIP: connection and security layers not yet in place — invoke those first.
-version: 1.0.0
-tags: [databricks, lakebase, read, write, patterns, queries, postgrest]
+version: 2.0.0
+tags: [databricks, lakebase, queries, data-access, postgrest]
 ---
 
 # Databricks Data Patterns Skill
 
-## When to Invoke
-
-**Auto-invoke this skill when ANY of these signals appear:**
-- `databricks-connection` and `databricks-security` are already set up
-- Writing SQL queries, reads, writes, upserts, or deletes against Databricks/Lakebase
-- User asks "how do I query Databricks?" or "how do I read/write Lakebase data?"
-- Building data-fetching hooks, API routes, or server actions that hit Databricks
-- Implementing pagination, batch inserts, transactions, or bulk loads for Databricks
-- Handling errors from Databricks SQL or Lakebase Data API responses
-
-**Invoke order**: `databricks-architecture` → `databricks-connection` → `databricks-security` → **`databricks-data-patterns`**
-
----
-
 ## Purpose
 
-Apply correct read/write patterns after connection is established. Covers both
-the frontend Data API (PostgREST) and backend direct PostgreSQL paths.
+Generate project-specific query files — not generic examples.
+Run after `databricks-connection` and `databricks-security` are complete.
 
 ---
 
-## Frontend — Data API Read Patterns (PostgREST)
+## Step 1 — Discover Entities
 
-All reads go through HTTP GET with PostgREST query parameters.
+Scan the project for existing schema files, models, or migrations to identify
+table names automatically. Look for:
+- `prisma/schema.prisma` — model names
+- `models.py`, `models/*.py` — Django or SQLAlchemy model class names
+- `db/migrations/` — table names from CREATE TABLE statements
+- `types/`, `interfaces/` — existing TypeScript interfaces
+
+If nothing found, ask:
+
+> "What are the main tables or entities in your Lakebase project?
+> List them with their key columns if you know them, e.g.:
+> - users (id, name, email, created_at)
+> - orders (id, user_id, total, status)"
+
+---
+
+## Step 2 — Identify Required Operations
+
+For each entity, ask:
+
+> "For each entity, which operations do you need?
+> 1. Read-only (list + get by ID)
+> 2. Full CRUD (read + insert + update + delete)
+> 3. Specific queries (describe what you need — e.g. filter by status, search by name)"
+
+---
+
+## Step 3 — Generate Query Files
+
+Use the app type from `databricks-architecture` classification to choose the path.
+
+---
+
+### Frontend path → TypeScript query modules
+
+For each entity, write `lib/api/[entity]-queries.ts`:
 
 ```typescript
+// lib/api/[entity]-queries.ts
+import { dataApiFetch } from '@/lib/api/lakebase-client'
 import { tokenManager } from '@/auth/token-manager'
+import type { [Entity] } from '@/types/[entity]'
 
 const BASE = import.meta.env.VITE_DATA_API_BASE_URL
 
-async function apiFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const token = await tokenManager.getAccessToken()
-  const url = new URL(`${BASE}/${path}`)
-  if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) throw new Error(`Data API ${res.status}: ${await res.text()}`)
-  return res.json() as Promise<T>
+// List with cursor-based pagination
+export async function getAll[Entities](filters?: {
+  limit?: number
+  afterId?: number
+}): Promise<[Entity][]> {
+  const params: Record<string, string> = {
+    select: 'id,[columns]',
+    order: 'id.asc',
+    limit: String(filters?.limit ?? 20),
+  }
+  if (filters?.afterId) params['id'] = `gt.${filters.afterId}`
+  return dataApiFetch<[Entity][]>('public/[entity]', params)
 }
 
-// Select specific columns only — never select *
-const users = await apiFetch<User[]>('public/users', { select: 'id,name,email' })
-
-// Filter rows (operators: eq, neq, gt, gte, lt, lte, like, ilike, in)
-const active = await apiFetch<Order[]>('public/orders', {
-  status: 'eq.active',
-  created_at: 'gte.2024-01-01',
-})
-
-// Cursor-based pagination (preferred over offset for large tables)
-const page = await apiFetch<User[]>('public/users', {
-  select: 'id,name',
-  order: 'id.asc',
-  id: `gt.${lastSeenId}`,
-  limit: '20',
-})
-
-// Embed related table (join)
-const orders = await apiFetch<Order[]>('public/orders', {
-  select: 'id,total,user:users(name,email)',
-})
-
-// Full-text search
-const results = await apiFetch<Product[]>('public/products', {
-  name: 'ilike.*laptop*',
-})
-```
-
----
-
-## Frontend — Data API Write Patterns (PostgREST)
-
-```typescript
-const token = await tokenManager.getAccessToken()
-const headers = {
-  Authorization: `Bearer ${token}`,
-  'Content-Type': 'application/json',
-  Prefer: 'return=representation', // returns the inserted/updated row
+// Get single record
+export async function get[Entity]ById(id: number): Promise<[Entity] | null> {
+  const rows = await dataApiFetch<[Entity][]>('public/[entity]', {
+    id: `eq.${id}`,
+    limit: '1',
+  })
+  return rows[0] ?? null
 }
 
 // Insert
-const res = await fetch(`${BASE}/public/users`, {
-  method: 'POST',
-  headers,
-  body: JSON.stringify({ name: 'Jane', email: 'jane@example.com' }),
-})
-const [created] = await res.json() as User[]
+export async function create[Entity](data: Omit<[Entity], 'id'>): Promise<[Entity]> {
+  const token = await tokenManager.getAccessToken()
+  const res = await fetch(`${BASE}/public/[entity]`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(`Create [entity] failed: ${res.status}`)
+  const [created] = await res.json() as [Entity][]
+  return created
+}
 
-// Update — always include a filter, never patch without WHERE
-await fetch(`${BASE}/public/users?id=eq.${userId}`, {
-  method: 'PATCH',
-  headers,
-  body: JSON.stringify({ name: 'Jane Smith' }),
-})
+// Update — always filtered, never unguarded PATCH
+export async function update[Entity](id: number, data: Partial<Omit<[Entity], 'id'>>): Promise<void> {
+  const token = await tokenManager.getAccessToken()
+  const res = await fetch(`${BASE}/public/[entity]?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error(`Update [entity] failed: ${res.status}`)
+}
 
-// Upsert (insert or update on conflict)
-await fetch(`${BASE}/public/users`, {
-  method: 'POST',
-  headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=representation' },
-  body: JSON.stringify({ id: userId, name: 'Jane', email: 'jane@example.com' }),
-})
-
-// Delete — always include a filter, never delete without WHERE
-await fetch(`${BASE}/public/users?id=eq.${userId}`, {
-  method: 'DELETE',
-  headers: { Authorization: `Bearer ${token}` },
-})
-```
-
-**Rules:**
-- Always filter on PATCH and DELETE — unfiltered operations affect every row
-- Use `Prefer: return=representation` to get the mutated row without a second request
-- Use cursor-based pagination (`id > lastId`) instead of `offset` for consistent performance
-- Bulk writes and transactions are not supported via Data API — use a backend for those
-
----
-
-## Backend — Read Patterns (PostgreSQL)
-
-```python
-# Always use parameterized queries — never format SQL with string concatenation
-with get_conn() as conn, conn.cursor() as cur:
-    cur.execute("SELECT id, name FROM users WHERE id = %s", (user_id,))
-    row = cur.fetchone()
-
-# Cursor-based pagination (OFFSET degrades at scale — avoid it)
-with get_conn() as conn, conn.cursor() as cur:
-    cur.execute(
-        "SELECT id, name FROM users WHERE id > %s ORDER BY id LIMIT %s",
-        (last_seen_id, page_size),
-    )
-    rows = cur.fetchall()
-
-# Batch read by list of IDs
-with get_conn() as conn, conn.cursor() as cur:
-    cur.execute(
-        "SELECT id, name FROM users WHERE id = ANY(%s)",
-        (user_ids,),  # pass as list — psycopg2 converts to SQL array
-    )
-    rows = cur.fetchall()
-```
-
----
-
-## Backend — Write Patterns (PostgreSQL)
-
-```python
-# Single insert with RETURNING
-with get_conn() as conn, conn.cursor() as cur:
-    cur.execute(
-        "INSERT INTO users (name, email) VALUES (%s, %s) RETURNING id",
-        (name, email),
-    )
-    new_id = cur.fetchone()[0]
-    conn.commit()
-
-# Transaction — all-or-nothing across multiple statements
-with get_conn() as conn:
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO orders (user_id, total) VALUES (%s, %s)", (user_id, total)
-            )
-            cur.execute(
-                "UPDATE inventory SET qty = qty - 1 WHERE product_id = %s", (product_id,)
-            )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-
-# Batch insert — far faster than inserting in a loop
-with get_conn() as conn, conn.cursor() as cur:
-    cur.executemany(
-        "INSERT INTO events (user_id, type, data) VALUES (%s, %s, %s)",
-        [(row.user_id, row.type, row.data) for row in events],
-    )
-    conn.commit()
-
-# Upsert (INSERT ... ON CONFLICT DO UPDATE)
-with get_conn() as conn, conn.cursor() as cur:
-    cur.execute(
-        """
-        INSERT INTO users (id, name, email) VALUES (%s, %s, %s)
-        ON CONFLICT (id) DO UPDATE
-          SET name  = EXCLUDED.name,
-              email = EXCLUDED.email
-        """,
-        (user_id, name, email),
-    )
-    conn.commit()
-
-# Bulk load via COPY — fastest for large datasets
-from io import StringIO
-with get_conn() as conn, conn.cursor() as cur:
-    buf = StringIO()
-    for row in rows:
-        buf.write(f"{row.user_id},{row.type},{row.data}\n")
-    buf.seek(0)
-    cur.copy_expert("COPY events (user_id, type, data) FROM STDIN CSV", buf)
-    conn.commit()
-```
-
----
-
-## Error Handling
-
-**Frontend — retry once on 401 (token expired mid-flight):**
-```typescript
-async function dataApiFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
-  try {
-    return await apiFetch<T>(path, params)
-  } catch (err: unknown) {
-    if (err instanceof Error && err.message.includes('401')) {
-      await tokenManager.getAccessToken() // forces silent refresh
-      return apiFetch<T>(path, params)    // retry once
-    }
-    throw err
-  }
+// Delete — always filtered, never unguarded DELETE
+export async function delete[Entity](id: number): Promise<void> {
+  const token = await tokenManager.getAccessToken()
+  const res = await fetch(`${BASE}/public/[entity]?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(`Delete [entity] failed: ${res.status}`)
 }
 ```
 
-**Backend — handle constraint violations explicitly:**
-```python
-from psycopg2 import errors
+Also generate `types/[entity].ts` for each entity:
 
-try:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(...)
-        conn.commit()
-except errors.UniqueViolation:
-    raise  # duplicate key — surface to caller
-except errors.ForeignKeyViolation:
-    raise  # referential integrity — surface to caller
-except Exception:
-    conn.rollback()
-    raise
+```typescript
+// types/[entity].ts
+export interface [Entity] {
+  id: number
+  [column]: [type]  // fill in from actual table schema
+}
 ```
 
 ---
 
-## Pattern Quick Reference
+### Backend path → Python query modules
 
-| Need | Frontend (Data API) | Backend (PostgreSQL) |
-|---|---|---|
-| Fetch rows | `GET /schema/table?col=eq.val` | `SELECT ... WHERE col = %s` |
-| Paginate | `?order=id.asc&id=gt.X&limit=20` | `WHERE id > %s ORDER BY id LIMIT %s` |
-| Insert | `POST /schema/table` | `INSERT ... RETURNING id` |
-| Update | `PATCH /schema/table?id=eq.X` | `UPDATE ... WHERE id = %s` |
-| Upsert | `POST` + `Prefer: resolution=merge-duplicates` | `INSERT ... ON CONFLICT DO UPDATE` |
-| Delete | `DELETE /schema/table?id=eq.X` | `DELETE FROM ... WHERE id = %s` |
-| Bulk write | Not supported — use backend | `executemany` or `COPY` |
-| Transaction | Not supported — use backend | `conn.commit()` / `conn.rollback()` |
+For each entity, write `db/queries/[entity].py`:
+
+```python
+# db/queries/[entity].py
+from db.connection import get_conn
+
+
+def get_all_[entities](*, after_id: int = 0, limit: int = 20) -> list[dict]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, [columns] FROM [entity] WHERE id > %s ORDER BY id LIMIT %s",
+            (after_id, limit),
+        )
+        cols = [d.name for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_[entity]_by_id([entity]_id: int) -> dict | None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, [columns] FROM [entity] WHERE id = %s",
+            ([entity]_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        cols = [d.name for d in cur.description]
+        return dict(zip(cols, row))
+
+
+def create_[entity](data: dict) -> int:
+    cols = list(data.keys())
+    placeholders = ", ".join(["%s"] * len(cols))
+    col_names = ", ".join(cols)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO [entity] ({col_names}) VALUES ({placeholders}) RETURNING id",
+            tuple(data[c] for c in cols),
+        )
+        new_id: int = cur.fetchone()[0]
+        conn.commit()
+        return new_id
+
+
+def update_[entity]([entity]_id: int, data: dict) -> None:
+    if not data:
+        return
+    cols = list(data.keys())
+    set_clause = ", ".join(f"{c} = %s" for c in cols)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE [entity] SET {set_clause} WHERE id = %s",
+            (*[data[c] for c in cols], [entity]_id),
+        )
+        conn.commit()
+
+
+def delete_[entity]([entity]_id: int) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM [entity] WHERE id = %s", ([entity]_id,))
+        conn.commit()
+```
+
+---
+
+## Step 4 — Mark State Done
+
+After all query files are written, run:
+
+```bash
+python3 -c "import json,time; s=json.load(open('/tmp/databricks-state.json')); s['data_patterns_applied']=True; s['last_updated']=int(time.time()); open('/tmp/databricks-state.json','w').write(json.dumps(s))"
+```
 
 ---
 
 ## Handoff
 
-This is the final skill in the Databricks setup chain. After covering the
-relevant patterns, present this completion message to the user:
-
-> "Databricks integration complete. All four layers are in place:
+> "Data access layer complete. Generated query modules for: [entity list].
+>
+> Files created:
+> [list files written]
+>
+> All four Databricks setup steps are now done:
 > architecture → connection → security → data patterns.
 >
-> Your next step is to implement `fetchDashboardData()` in each datasource
-> with real queries against your Lakebase tables. Want help writing those?"
-
-If the user wants help with queries, assist them directly — no further skill
-invocation needed.
+> Want help wiring these into your components or API routes?"

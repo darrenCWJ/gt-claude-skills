@@ -20,20 +20,6 @@ tags: [databricks, lakebase, architecture, migration]
 
 # Databricks Architecture Skill
 
-## When to Invoke
-
-**Auto-invoke this skill when ANY of these signals appear:**
-- User mentions "Databricks", "Lakebase", "Delta Lake", or "Unity Catalog"
-- User lists Databricks as a data source for an app or dashboard
-- `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, or `DATABRICKS_HTTP_PATH` appear in env vars or config
-- User says "connect to Databricks", "query Databricks", or "migrate to Databricks"
-- A new project is being planned that includes Databricks as a backend
-- **Databricks appears in any answer to a clarifying question** — e.g. user selects Databricks from a data source list, tech stack question, or backend choice, even if their original request said nothing about Databricks
-
-**Always invoke this skill FIRST** — it orchestrates which follow-up skills to call next.
-
----
-
 ## Purpose
 
 Shape the architecture before any code is written. Always run this skill first.
