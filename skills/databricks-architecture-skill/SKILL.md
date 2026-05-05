@@ -51,14 +51,20 @@ Guide the user to find credentials in the Databricks workspace UI.
 2. Click the **grid icon (⋮⋮⋮)** in the **top-right corner** (app-switcher)
 3. Click **Lakebase Postgres** from the dropdown
 4. Select your project → click **Connect** (top-right)
-5. Copy these four values:
+5. In the Connect dialog, configure the dropdowns: **Branch**, **Compute**, **Database**, **Role**
+6. Copy the connection details:
 
-| Field | Example |
+| What | How |
 |---|---|
-| **Host** | `ep-abc-123.databricks.com` |
-| **Database** | `databricks_postgres` |
-| **User / Role** | `my_role` |
-| **Password** | Click "Generate password" |
+| **Connection string** | Shown in the dialog — format: `postgresql://USER@HOST/DB?sslmode=require` |
+| **Host** | Extract from the connection string (e.g. `ep-abc-123.ap-southeast-1.cloud.databricks.com`) |
+| **Database** | Extract from the connection string (e.g. `databricks_postgres`) |
+| **User / Role** | Extract from the connection string (e.g. `your_role_name`) |
+| **OAuth token** | Click **"Copy OAuth token"** — this is your password (expires in ~1 hour) |
+
+> **Note:** There is no "Generate password" button. The password is an OAuth token stored in a
+> secure vault that expires after ~1 hour — which is why automatic token rotation (covered in
+> `databricks-security`) is mandatory. Never hardcode this token.
 
 ### Official docs
 - https://docs.databricks.com/aws/en/oltp/projects/postgres-clients
