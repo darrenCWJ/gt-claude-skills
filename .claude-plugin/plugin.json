@@ -5,8 +5,7 @@
     "name": "Darren Chua",
     "email": ""
   },
-  "rules": [
-    "rules/databricks/patterns.md",
-    "rules/databricks/frontend-api.md"
+  "skills": [
+    "./skills/"
   ]
 }
