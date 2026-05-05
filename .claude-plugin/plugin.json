@@ -1,6 +1,6 @@
 {
-  "name": "databricks-connection-skill",
-  "description": "Best-practice patterns for connecting applications to Databricks Lakebase. Routes frontend-only apps to the PostgREST-compatible Data API and full-stack apps to direct Lakebase PostgreSQL connections.",
+  "name": "gt-claude-skills",
+  "description": "GovTech Claude Code skills collection. Includes best-practice patterns for Databricks/Lakebase connections and more.",
   "author": {
     "name": "Darren Chua",
     "email": ""

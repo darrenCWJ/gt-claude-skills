@@ -1,31 +1,28 @@
-# databricks-connection-skill
+# gt-claude-skills
 
-A Claude Code plugin that adds best-practice Databricks/Lakebase connection patterns as a skill.
+GovTech's Claude Code skills collection. Install once to get all skills — updates automatically when the repo is updated.
 
-## What it does
+## Skills included
 
-Automatically routes your app to the correct Databricks connection method:
-
-| App type | Connection |
-|---|---|
-| Frontend-only (SPA) | Lakebase Data API (PostgREST, OAuth OIDC) |
-| Full-stack (has backend) | Lakebase direct PostgreSQL |
+| Skill | Trigger keywords | Description |
+|---|---|---|
+| `databricks-connection-skill` | `databricks`, `lakebase` | Best-practice Databricks/Lakebase connection patterns |
 
 ## Install
 
 ```bash
-claude plugin install https://github.com/<your-username>/databricks-connection-skill
+claude plugin install https://github.com/<your-username>/gt-claude-skills
 ```
 
 ## Update
 
 ```bash
-claude plugin update databricks-connection-skill
+claude plugin update gt-claude-skills
 ```
 
 ## Usage
 
-Once installed, the skill activates when your message contains keywords like `databricks` or `lakebase`. You can also invoke it directly:
+Skills activate automatically when your message contains their trigger keywords. You can also invoke directly:
 
 ```
 /databricks-connection
