@@ -138,3 +138,17 @@ User wants Databricks/Lakebase integration
                     └─ Path: Direct Lakebase PostgreSQL (OAuth always)
                               └─ Skills: connection → security → data-patterns
 ```
+
+---
+
+## Handoff
+
+After classification and any clarifying questions are resolved, present this
+prompt to the user verbatim before invoking `databricks-connection`:
+
+> "Architecture classified. Ready to set up the **connection layer** next —
+> this generates the Lakebase PostgreSQL connection code and environment
+> variables for your stack. Want to continue?"
+
+If the user confirms, invoke `databricks-connection` immediately.
+If they decline, summarise what will need to be done manually.

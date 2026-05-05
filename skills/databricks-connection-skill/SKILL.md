@@ -5,10 +5,10 @@ description: >
   for frontend apps, direct PostgreSQL connection for backends (OAuth only).
   Asks one question (driver vs ORM) for backend path.
   TRIGGER when: databricks-architecture has classified the app type; user needs
-  Databricks/Lakebase connection code; user asks how to connect to Databricks;
-  writing any db connection file that targets Databricks or Lakebase; env vars
-  DATABRICKS_HOST, LAKEBASE_HOST, or DATABRICKS_HTTP_PATH are being configured;
-  user asks about Databricks SQL warehouse or Lakebase PostgreSQL endpoint.
+  Databricks/Lakebase connection code; user asks how to connect to Databricks
+  or Lakebase; writing any db connection file that targets Lakebase; env vars
+  LAKEBASE_HOST, LAKEBASE_DB, LAKEBASE_USER, or LAKEBASE_OAUTH_TOKEN are being
+  configured; user asks about Lakebase PostgreSQL endpoints.
   SKIP: databricks-architecture has not yet run — invoke that first.
 version: 2.0.0
 tags: [databricks, lakebase, postgresql, data-api, connection, oauth]
@@ -21,10 +21,10 @@ tags: [databricks, lakebase, postgresql, data-api, connection, oauth]
 **Auto-invoke this skill when ANY of these signals appear:**
 - `databricks-architecture` has just classified the app type
 - User needs connection boilerplate for Databricks or Lakebase
-- Env vars `DATABRICKS_HOST`, `LAKEBASE_HOST`, `DATABRICKS_HTTP_PATH`, or `DATABRICKS_TOKEN` are being set up
+- Env vars `LAKEBASE_HOST`, `LAKEBASE_DB`, `LAKEBASE_USER`, or `LAKEBASE_OAUTH_TOKEN` are being set up
 - User asks "how do I connect to Databricks?" or "how do I connect to Lakebase?"
-- Writing a database connection file (`db/connection.ts`, `lib/db.ts`, etc.) that targets Databricks
-- User asks about SQL warehouse endpoints or Lakebase PostgreSQL
+- Writing a database connection file (`db/connection.ts`, `lib/db.ts`, etc.) that targets Lakebase
+- User asks about Lakebase PostgreSQL endpoints
 
 **Invoke order**: `databricks-architecture` → **`databricks-connection`** → `databricks-security` → `databricks-data-patterns`
 
@@ -105,6 +105,12 @@ LAKEBASE_USER=your_role_name
 DATABASE_URL=postgresql://your_role_name@ep-abc-123.databricks.com/databricks_postgres?sslmode=require
 ```
 
+### Connection string format (OAuth token as password)
+
+```
+postgresql://user@example.com:oauth_token@ep-abc-123.databricks.com/databricks_postgres?sslmode=require
+```
+
 > Token is fetched fresh per connection via `LakebaseTokenRotator` — see `databricks-security` skill.
 
 ---
@@ -113,7 +119,8 @@ DATABASE_URL=postgresql://your_role_name@ep-abc-123.databricks.com/databricks_po
 
 ```python
 # db/connection.py
-import os, psycopg2
+import os
+import psycopg2
 from auth.token_rotator import get_lakebase_token
 
 def get_conn():
@@ -139,11 +146,12 @@ from auth.token_rotator import get_lakebase_token
 def get_engine():
     engine = create_engine(
         os.environ["DATABASE_URL"],
-        pool_size=1,
+        pool_size=1,       # OAuth: no persistent pooling
         max_overflow=0,
         pool_pre_ping=True,
         connect_args={"sslmode": "require"},
     )
+    # Inject fresh token before each new connection
     @event.listens_for(engine, "do_connect")
     def provide_token(dialect, conn_rec, cargs, cparams):
         cparams["password"] = get_lakebase_token()
@@ -175,7 +183,7 @@ DATABASES = {
         "PORT": os.environ.get("LAKEBASE_PORT", "5432"),
         "NAME": os.environ["LAKEBASE_DB"],
         "USER": os.environ["LAKEBASE_USER"],
-        "PASSWORD": "",  # set dynamically via token rotator
+        "PASSWORD": "",  # set dynamically — see token rotator
         "OPTIONS": {"sslmode": "require"},
     }
 }
@@ -194,9 +202,9 @@ export function createPool() {
     port: Number(process.env.LAKEBASE_PORT ?? 5432),
     database: process.env.LAKEBASE_DB,
     user: process.env.LAKEBASE_USER,
-    password: () => getLakebaseToken(),
+    password: () => getLakebaseToken(), // fetched fresh per connection
     ssl: { rejectUnauthorized: true },
-    max: 1,
+    max: 1, // OAuth: no persistent pooling
   })
 }
 ```
@@ -215,11 +223,27 @@ generator client {
 }
 ```
 
+```typescript
+// db/prisma.ts
+import { PrismaClient } from '@prisma/client'
+
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
+
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error'] : ['error'],
+  })
+
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+```
+
 ### Java — JDBC with HikariCP
 
 ```java
 // config/DataSourceConfig.java
-import com.zaxxer.hikari.*;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 public class DataSourceConfig {
     public static DataSource build() {
@@ -231,8 +255,8 @@ public class DataSourceConfig {
             System.getenv("LAKEBASE_DB")
         ));
         config.setUsername(System.getenv("LAKEBASE_USER"));
-        config.setPassword(TokenRotator.getToken());
-        config.setMaximumPoolSize(1);
+        config.setPassword(TokenRotator.getToken()); // fresh token
+        config.setMaximumPoolSize(1); // OAuth: no persistent pooling
         config.addDataSourceProperty("sslmode", "require");
         return new HikariDataSource(config);
     }
@@ -242,11 +266,12 @@ public class DataSourceConfig {
 ### Kotlin — Spring Boot (`application.yml`)
 
 ```yaml
+# src/main/resources/application.yml
 spring:
   datasource:
     url: jdbc:postgresql://${LAKEBASE_HOST}:${LAKEBASE_PORT:5432}/${LAKEBASE_DB}?sslmode=require
     username: ${LAKEBASE_USER}
-    password: ${LAKEBASE_OAUTH_TOKEN}
+    password: ${LAKEBASE_OAUTH_TOKEN}  # injected at startup via token rotator
     hikari:
       maximum-pool-size: 1
       connection-timeout: 30000
@@ -255,3 +280,18 @@ spring:
     hibernate:
       ddl-auto: validate
 ```
+
+---
+
+## Handoff
+
+After generating connection boilerplate, present this prompt to the user
+verbatim before invoking `databricks-security`:
+
+> "Connection layer done. The **security & token rotation** step is next —
+> this adds OAuth token auto-rotation so your Lakebase credentials never
+> expire mid-request. Want to continue?"
+
+If the user confirms, invoke `databricks-security` immediately.
+If they decline, warn that static tokens will expire (~1 hour) and must be
+rotated manually.

@@ -115,7 +115,7 @@ export const tokenManager = new DatabricksTokenManager()
 ```
 
 ```typescript
-// Usage in Data API client
+// Usage in Data API client — replace direct sessionStorage access
 import { tokenManager } from '@/auth/token-manager'
 
 export async function dataApiGet<T>(
@@ -219,3 +219,19 @@ Before marking any Databricks integration complete:
 - [ ] Backend credentials loaded from environment variables only
 - [ ] Minimum required permissions scoped per Databricks role
 - [ ] No connection poolers used with OAuth backend connections
+
+---
+
+## Handoff
+
+After implementing token rotation and completing the checklist, present this
+prompt to the user verbatim before invoking `databricks-data-patterns`:
+
+> "Security layer done — token rotation and credential management are in place.
+> The **data patterns** step is next — this covers how to write safe,
+> paginated queries, upserts, transactions, and error handling against
+> Lakebase. Want to continue?"
+
+If the user confirms, invoke `databricks-data-patterns` immediately.
+If they decline, the integration is functional but queries will need to be
+written without the safety patterns (parameterisation, pagination limits, etc).

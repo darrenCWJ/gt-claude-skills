@@ -39,6 +39,8 @@ the frontend Data API (PostgREST) and backend direct PostgreSQL paths.
 
 ## Frontend — Data API Read Patterns (PostgREST)
 
+All reads go through HTTP GET with PostgREST query parameters.
+
 ```typescript
 import { tokenManager } from '@/auth/token-manager'
 
@@ -92,7 +94,7 @@ const token = await tokenManager.getAccessToken()
 const headers = {
   Authorization: `Bearer ${token}`,
   'Content-Type': 'application/json',
-  Prefer: 'return=representation',
+  Prefer: 'return=representation', // returns the inserted/updated row
 }
 
 // Insert
@@ -110,7 +112,7 @@ await fetch(`${BASE}/public/users?id=eq.${userId}`, {
   body: JSON.stringify({ name: 'Jane Smith' }),
 })
 
-// Upsert
+// Upsert (insert or update on conflict)
 await fetch(`${BASE}/public/users`, {
   method: 'POST',
   headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=representation' },
@@ -127,8 +129,8 @@ await fetch(`${BASE}/public/users?id=eq.${userId}`, {
 **Rules:**
 - Always filter on PATCH and DELETE — unfiltered operations affect every row
 - Use `Prefer: return=representation` to get the mutated row without a second request
-- Use cursor-based pagination (`id > lastId`) instead of `offset`
-- Bulk writes and transactions are not supported via Data API — use a backend
+- Use cursor-based pagination (`id > lastId`) instead of `offset` for consistent performance
+- Bulk writes and transactions are not supported via Data API — use a backend for those
 
 ---
 
@@ -152,7 +154,7 @@ with get_conn() as conn, conn.cursor() as cur:
 with get_conn() as conn, conn.cursor() as cur:
     cur.execute(
         "SELECT id, name FROM users WHERE id = ANY(%s)",
-        (user_ids,),
+        (user_ids,),  # pass as list — psycopg2 converts to SQL array
     )
     rows = cur.fetchall()
 ```
@@ -194,7 +196,7 @@ with get_conn() as conn, conn.cursor() as cur:
     )
     conn.commit()
 
-# Upsert
+# Upsert (INSERT ... ON CONFLICT DO UPDATE)
 with get_conn() as conn, conn.cursor() as cur:
     cur.execute(
         """
@@ -222,15 +224,15 @@ with get_conn() as conn, conn.cursor() as cur:
 
 ## Error Handling
 
-**Frontend — retry once on 401:**
+**Frontend — retry once on 401 (token expired mid-flight):**
 ```typescript
 async function dataApiFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
   try {
     return await apiFetch<T>(path, params)
   } catch (err: unknown) {
     if (err instanceof Error && err.message.includes('401')) {
-      await tokenManager.getAccessToken()
-      return apiFetch<T>(path, params)
+      await tokenManager.getAccessToken() // forces silent refresh
+      return apiFetch<T>(path, params)    // retry once
     }
     throw err
   }
@@ -246,9 +248,9 @@ try:
         cur.execute(...)
         conn.commit()
 except errors.UniqueViolation:
-    raise
+    raise  # duplicate key — surface to caller
 except errors.ForeignKeyViolation:
-    raise
+    raise  # referential integrity — surface to caller
 except Exception:
     conn.rollback()
     raise
@@ -268,3 +270,19 @@ except Exception:
 | Delete | `DELETE /schema/table?id=eq.X` | `DELETE FROM ... WHERE id = %s` |
 | Bulk write | Not supported — use backend | `executemany` or `COPY` |
 | Transaction | Not supported — use backend | `conn.commit()` / `conn.rollback()` |
+
+---
+
+## Handoff
+
+This is the final skill in the Databricks setup chain. After covering the
+relevant patterns, present this completion message to the user:
+
+> "Databricks integration complete. All four layers are in place:
+> architecture → connection → security → data patterns.
+>
+> Your next step is to implement `fetchDashboardData()` in each datasource
+> with real queries against your Lakebase tables. Want help writing those?"
+
+If the user wants help with queries, assist them directly — no further skill
+invocation needed.
