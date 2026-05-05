@@ -1,17 +1,20 @@
 # gt-claude-skills
 
-GovTech's Claude Code skills collection. Install once to get all skills, hooks, and rules — updates automatically when the repo is updated.
+GovTech's Claude Code skills collection. Includes Databricks/Lakebase best-practice patterns
+for connection, security, and data access across all app types.
 
 ## Install
 
 ```bash
-claude plugin install https://github.com/darrenCWJ/gt-claude-skills
+git clone https://github.com/darrenCWJ/gt-claude-skills
+claude plugin install ./gt-claude-skills
 ```
 
 ## Update
 
 ```bash
-claude plugin update gt-claude-skills
+cd gt-claude-skills && git pull
+claude plugin install ./gt-claude-skills
 ```
 
 ---
@@ -22,65 +25,62 @@ claude plugin update gt-claude-skills
 
 | Skill | Description |
 |---|---|
-| `databricks-architecture` | Classifies app type (frontend-only / full-stack / migration), guides credential setup, orchestrates follow-up skills |
+| `databricks-architecture` | Classifies app type (frontend / fullstack / script / migration), guides credential setup per path, orchestrates follow-up skills |
 | `databricks-connection` | Generates stack-specific connection boilerplate — Data API client (frontend) or PostgreSQL driver/ORM (backend) |
-| `databricks-security` | Generates OAuth token rotation code, runs security checklist |
-| `databricks-data-patterns` | Discovers project entities and generates typed query modules for real tables |
+| `databricks-security` | PKCE login flow, silent refresh, backend token rotation, M2M service principal setup, security checklist |
+| `databricks-data-patterns` | Discovers project entities and generates typed query modules with transactions, bulk insert, and error handling |
 
-### Rules (auto-loaded)
+### Rules (auto-loaded on matching files)
 
 | File | Applies to | Purpose |
 |---|---|---|
-| `rules/databricks/patterns.md` | `.py`, `.ipynb`, `.sql` | Always-on coding guidance: connection, Delta read/write, upserts, secrets, error handling |
-| `rules/databricks/frontend-api.md` | `.ts`, `.tsx`, `.js`, `.jsx` | Frontend architecture constraint: OIDC OAuth → Data API (PostgREST) → Lakebase only |
+| `rules/databricks/activation.md` | `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.sql`, `.ipynb` | Tells Claude which skill to invoke based on project state |
+| `rules/databricks/patterns.md` | `.py`, `.ipynb`, `.sql` | Coding constraints: connection patterns, parameterized queries, upserts, secrets |
+| `rules/databricks/frontend-api.md` | `.ts`, `.tsx`, `.js`, `.jsx` | Frontend constraint: OIDC OAuth → Data API only, never direct PostgreSQL |
 
 ### Hooks (auto-registered)
 
 | Hook | Fires when | Does |
 |---|---|---|
-| `UserPromptSubmit` | Message contains "databricks" or "lakebase" | Triggers `databricks-architecture` if not yet classified; reminds about incomplete steps |
-| `PreToolUse` | Claude writes code with Databricks keywords | Enforces relevant setup steps before writing connection, security, or data code |
+| `UserPromptSubmit` | Message shows intent to integrate with Databricks/Lakebase | First-time: prompts `databricks-architecture`; confirmed project: checks activation policy |
+| `PreToolUse` | Writing code with Databricks keywords (in confirmed projects) | Checks activation policy; detects frontend→fullstack transition |
 
 ---
 
 ## How it works
 
-### Setup state
+### Project marker
 
-Both hooks share a state file at `/tmp/databricks-state.json` that tracks four independent setup steps:
+When `databricks-architecture` runs, it creates a `.lakebase` file in the project root:
 
 ```json
-{
-  "architecture_classified": false,
-  "connection_configured": false,
-  "security_checklist_done": false,
-  "data_patterns_applied": false
-}
+{ "app_type": "frontend", "stack": "typescript", "personal": false }
 ```
 
-- Each flag is only set after the corresponding skill completes
-- Once all four flags are `true`, both hooks go completely silent
-- State resets on reboot or manually: `rm /tmp/databricks-state.json`
+This file:
+- Scopes hooks to confirmed Databricks projects (prevents false positives in unrelated projects)
+- Stores classification so downstream skills skip questions already answered
+- Enables the transition hook to detect when a frontend app becomes fullstack
 
 ### Setup flow
 
 ```
-User mentions Databricks/Lakebase
-  └─ Hook fires → databricks-architecture
-       └─ Classifies: frontend-only / full-stack / migration
+User mentions Databricks with setup intent
+  └─ Hook fires → invoke databricks-architecture
+       └─ Classifies app, asks stack + personal/team, writes .lakebase
             └─ Invokes: databricks-connection
                  └─ Generates connection boilerplate for your stack
                       └─ Invokes: databricks-security
-                           └─ Generates token rotation code + security checklist
+                           └─ PKCE login, token rotation, security checklist
                                 └─ Invokes: databricks-data-patterns
-                                     └─ Asks about your entities → generates query modules
+                                     └─ Asks about entities → generates typed query modules
 ```
 
 ### Skill vs rules responsibility
 
 | Layer | Responsibility |
 |---|---|
-| **Rules** | Passive always-on guidance — how to write Databricks code correctly |
+| **Rules** | Passive always-on constraints — how to write Databricks code correctly |
 | **Hooks** | Enforcement gates — ensure skills run before code is written |
 | **Skills** | Active setup wizards — ask questions, generate actual project files |
 
@@ -95,8 +95,8 @@ User mentions Databricks/Lakebase
 /databricks-data-patterns
 ```
 
-## Reset setup state
+## Reset project classification
 
 ```bash
-rm /tmp/databricks-state.json
+rm .lakebase
 ```
