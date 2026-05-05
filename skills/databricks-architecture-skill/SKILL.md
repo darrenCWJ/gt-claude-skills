@@ -70,6 +70,12 @@ If migration signals detected, ask:
 > 3. Java / Kotlin (Spring Boot, JDBC)
 > 4. Other — describe briefly"
 
+**Also ask the deployment context** — this changes which auth approach is recommended:
+
+> "Who will use this app?
+> 1. Just me — personal tool on my own Databricks workspace
+> 2. A team — shared workspace with multiple users or services"
+
 ---
 
 ## Step 1.5 — Write Project Marker
@@ -77,18 +83,19 @@ If migration signals detected, ask:
 After classification and stack identification, create `.lakebase` in the project root:
 
 ```bash
-echo '{"app_type":"CLASSIFIED_TYPE","stack":"STACK"}' > .lakebase
+echo '{"app_type":"CLASSIFIED_TYPE","stack":"STACK","personal":BOOL}' > .lakebase
 ```
 
 | Field | Values |
 |---|---|
 | `app_type` | `frontend`, `fullstack`, `script`, `migration` |
 | `stack` | `typescript`, `python`, `java`, `kotlin` |
+| `personal` | `true` if solo/personal workspace, `false` if team/org |
 
 This file:
 - Scopes hooks to confirmed Databricks projects (prevents false positives)
 - Records app type so the transition hook can detect frontend → fullstack changes
-- Lets downstream skills skip classification questions
+- Lets downstream skills skip classification questions and tailor auth guidance
 
 ---
 
@@ -110,9 +117,17 @@ Format:
 https://your-workspace.databricks.com/api/2.0/lakebase/v1/projects/PROJECT_ID/data-api
 ```
 
-**OAuth App registration (requires workspace admin):**
+**OAuth App registration:**
 The frontend uses PKCE OAuth. An OAuth application must be registered in the workspace.
-If you don't have admin access, share this with your workspace admin:
+
+If `personal = true` (you own this workspace): do this yourself —
+Workspace Settings → Security → OAuth Applications → **Add application**:
+- Name: `your-app-name`
+- Redirect URIs: `http://localhost:5173/auth/callback` (add production URI too)
+- Grant types: `Authorization Code`
+- Copy the **Client ID** — no client secret is needed for PKCE.
+
+If `personal = false` (shared workspace): share this with your workspace admin:
 
 > "Please register an OAuth application in Workspace Settings → Security → OAuth Applications:
 > - Name: `your-app-name`
@@ -149,12 +164,12 @@ VITE_DATA_API_BASE_URL=https://your-workspace.databricks.com/api/2.0/lakebase/v1
 > The password is a **short-lived OAuth token** (~1 hour) — never hardcode it.
 > Token rotation is mandatory and set up by `databricks-security`.
 
-**SDK credentials** (choose one):
+**SDK credentials — choose based on deployment context:**
 
-| Mode | Env vars | Best for |
+| Context | Recommended | Why |
 |---|---|---|
-| PAT (Personal Access Token) | `DATABRICKS_TOKEN` | Dev / personal use |
-| M2M Service Principal | `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` | Production — requires admin |
+| Personal workspace (solo) | PAT | You own the account — departure risk is zero; PAT with `postgres` scope is sufficient |
+| Team / org workspace | M2M service principal | PAT is tied to your personal account; if you leave, the app breaks |
 
 **Finding your endpoint path:**
 ```python
@@ -168,27 +183,34 @@ for e in w.postgres.list_endpoints(parent='projects/my-project/branches/producti
     print(e.name)  # typically 'primary'
 ```
 
-**PAT setup (Databricks UI):**
+**PAT setup (for personal workspace or dev):**
 1. User Settings → Developer → Access tokens → **Generate new token**
-2. Scope: `Other APIs` → API scope(s): **`postgres`** (not `sql` — wrong scope)
-3. Lifetime: 90 days for dev; use M2M for production
+2. Scope: `Other APIs` → API scope: **`postgres`** (not `sql` — wrong scope, will fail)
+3. Lifetime: 1 year is reasonable for personal production; set a calendar reminder to renew
 
-**M2M service principal (requires workspace admin):**
-Share this with your admin if you don't have access:
+**M2M service principal (for team/org workspace):**
+
+If `personal = true` (you own this workspace): do this yourself —
+1. Settings → Identity & Access → Service principals → **Add service principal**
+2. Name it `yourapp-lakebase-prod`
+3. On the service principal → **Secrets** → **Generate secret** (save immediately, shown once)
+4. Lakebase Postgres → your project → **Manage access** → add service principal with `Can use`
+
+If `personal = false` (shared workspace): share this with your admin:
 
 > "Please create a service principal for Lakebase access:
-> 1. Settings → Identity & Access → Service principals → **Add service principal**
+> 1. Settings → Identity & Access → Service principals → **Add service principal** — name: `yourapp-lakebase-prod`
 > 2. Generate a secret (shown once — save it immediately)
-> 3. Assign the service principal `Can use` permission on the Lakebase project
+> 3. Assign the service principal `Can use` on the Lakebase project
 > 4. Return the **Client ID** and **Client Secret** to the developer."
 
 Add to `.env`:
 ```env
 DATABRICKS_HOST=https://your-workspace.databricks.com
-DATABRICKS_TOKEN=<PAT>               # dev only
-# OR for production:
-DATABRICKS_CLIENT_ID=<from admin>
-DATABRICKS_CLIENT_SECRET=<from admin>
+DATABRICKS_TOKEN=<PAT>                       # personal workspace / dev
+# OR for team/org workspace:
+DATABRICKS_CLIENT_ID=<service principal ID>
+DATABRICKS_CLIENT_SECRET=<service principal secret>
 
 LAKEBASE_HOST=ep-abc-123.databricks.com
 LAKEBASE_PORT=5432

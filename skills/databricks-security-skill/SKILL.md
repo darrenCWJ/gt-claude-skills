@@ -27,9 +27,13 @@ principal guidance, and a final security checklist.
 
 ## Frontend — OAuth PKCE Login Flow
 
+> **Script / Notebook apps: skip this entire section.**
+> If `.lakebase` `app_type` is `script`, there is no browser and no user login.
+> Go directly to [Backend — OAuth Token Rotation](#backend--oauth-token-rotation-mandatory).
+
 Frontend tokens are obtained via PKCE (no client secret). This requires an
-OAuth application to be registered in the Databricks workspace (admin required —
-covered in `databricks-architecture` Step 2).
+OAuth application to be registered in the Databricks workspace (covered in
+`databricks-architecture` Step 2 — you can do this yourself if it's your own workspace).
 
 ### Part A — Login initiation and callback
 
@@ -237,19 +241,34 @@ Auth credential (PAT or M2M client secret)
 
 | Mode | Env vars | Best for |
 |---|---|---|
-| Static token | `LAKEBASE_OAUTH_TOKEN` (from Lakebase UI → Copy OAuth token) | Quick local testing only |
-| PAT auto-rotate | `DATABRICKS_HOST` + `DATABRICKS_TOKEN` | Dev / personal use |
-| M2M auto-rotate | `DATABRICKS_HOST` + `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` | Production |
+| Static token | `LAKEBASE_OAUTH_TOKEN` | Quick local testing only — expires ~1h, manual refresh |
+| PAT auto-rotate | `DATABRICKS_HOST` + `DATABRICKS_TOKEN` | Personal workspace production / dev |
+| M2M auto-rotate | `DATABRICKS_HOST` + `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` | Team/org workspace production |
+
+> **Personal workspace (`personal = true` in `.lakebase`):**
+> A PAT is the right choice for production — you own the account so departure risk is zero.
+> Use M2M only if you want to avoid renewing the PAT annually.
+>
+> **Team/org workspace (`personal = false`):**
+> Always use M2M in production. A PAT is tied to your personal account — if you leave
+> the organisation, the app loses access immediately.
 
 ### PAT setup
 
 1. Databricks → User Settings → Developer → Access tokens → **Generate new token**
 2. Scope: `Other APIs` → API scope: **`postgres`** (not `sql` — wrong scope, will fail)
-3. Lifetime: 90 days for dev; use M2M in production
+3. Lifetime:
+   - Personal production: 1 year — set a calendar reminder to renew
+   - Dev/staging: 90 days
 
-### M2M service principal (admin required)
+### M2M service principal
 
-If you don't have workspace admin access, share this with your admin:
+**If it's your own workspace** (personal = true): do this yourself —
+1. Settings → Identity & Access → Service principals → **Add service principal** (name: `yourapp-lakebase-prod`)
+2. On the service principal → **Secrets** → **Generate secret** (save immediately, shown once)
+3. Lakebase Postgres → your project → **Manage access** → add service principal with `Can use`
+
+**If it's a shared workspace** (personal = false): share this with your admin:
 
 > "Please create a Databricks service principal for our app to access Lakebase:
 >
@@ -402,19 +421,25 @@ DATABASE_URL=                        # postgresql://user@host/db?sslmode=require
 
 Before marking any Databricks integration complete:
 
+**All apps:**
 - [ ] No tokens or passwords committed to source control
 - [ ] `.env` added to `.gitignore`
 - [ ] `.env.example` created with placeholder values
 - [ ] SSL enforced on all connections (`sslmode=require`)
-- [ ] Frontend tokens in `sessionStorage` only (never `localStorage`)
-- [ ] Frontend PKCE login flow implemented (`initiateLogin` + `handleCallback`)
-- [ ] Frontend silent refresh implemented (`DatabricksTokenManager`)
-- [ ] Frontend logout clears `sessionStorage`
-- [ ] Backend token rotation implemented (`LakebaseTokenRotator`)
 - [ ] Backend credentials loaded from environment variables only
-- [ ] Production uses M2M service principal (not a personal PAT)
 - [ ] No connection poolers used with OAuth backend connections
-- [ ] Minimum required permissions scoped per Databricks role
+- [ ] Minimum required permissions scoped per Databricks role (`postgres` scope only)
+
+**Backend / script / fullstack:**
+- [ ] Token rotation implemented (`LakebaseTokenRotator`)
+- [ ] Personal workspace: PAT scoped to `postgres`, expiry reminder set
+- [ ] Team workspace: M2M service principal in use (not a personal PAT)
+
+**Frontend / fullstack (browser):**
+- [ ] Frontend tokens in `sessionStorage` only (never `localStorage`)
+- [ ] PKCE login flow implemented (`initiateLogin` + `handleCallback`)
+- [ ] Silent refresh implemented (`DatabricksTokenManager`)
+- [ ] Logout clears `sessionStorage`
 
 ---
 
