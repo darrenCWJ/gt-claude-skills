@@ -92,6 +92,20 @@ If classification is ambiguous, ask:
 
 ---
 
+## Step 1.5 — Write Project Marker
+
+After classification, create the `.lakebase` marker file in the project root:
+
+```bash
+echo '{"app_type":"CLASSIFIED_TYPE"}' > .lakebase
+```
+
+Replace `CLASSIFIED_TYPE` with the actual value: `frontend`, `fullstack`, or `migration`.
+
+This file scopes all Databricks hooks to this project — hooks will not fire in non-Databricks projects that happen to mention Databricks keywords.
+
+---
+
 ## Step 2 — Orchestrate Follow-up Skills
 
 After classification, invoke skills in this order:

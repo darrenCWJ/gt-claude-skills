@@ -1,8 +1,12 @@
 #!/bin/bash
 # Detects Databricks/Lakebase references in code Claude is about to write.
-# Reminds Claude to check the activation policy rules before proceeding.
+# Only fires in confirmed Databricks projects (.lakebase marker must exist).
 
 input=$(cat)
+
+if [ ! -f ".lakebase" ]; then
+  exit 0
+fi
 
 tool_name=$(echo "$input" | python3 -c "
 import sys, json

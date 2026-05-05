@@ -12,6 +12,7 @@ paths:
 
 > Check project state before writing any Databricks/Lakebase code.
 > Invoke the relevant skill when its condition is met — no need to invoke all skills every time.
+> The `.lakebase` file in the project root confirms this is a Databricks/Lakebase project and is created by `databricks-architecture`.
 
 ## databricks-architecture
 
