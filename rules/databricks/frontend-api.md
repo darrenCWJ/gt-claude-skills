@@ -27,6 +27,4 @@ Frontend → Data API (PostgREST) ← OIDC OAuth token ← Lakebase Postgres
 
 ## Reference
 
-See skill: `databricks-connection` for Data API client setup.
-See skill: `databricks-security` for OIDC token manager implementation.
-See skill: `databricks-data-patterns` for typed PostgREST query modules.
+See skill: `databricks-lakebase` for Data API client, OIDC token manager, and query patterns.

@@ -25,16 +25,13 @@ claude plugin install ./claude-databricks-skill
 
 | Skill | Description |
 |---|---|
-| `databricks-architecture` | Classifies app type (frontend / fullstack / script / migration), guides credential setup per path, orchestrates follow-up skills |
-| `databricks-connection` | Generates stack-specific connection boilerplate — Data API client (frontend) or PostgreSQL driver/ORM (backend) |
-| `databricks-security` | PKCE login flow, silent refresh, backend token rotation, M2M service principal setup, security checklist |
-| `databricks-data-patterns` | Discovers project entities and generates typed query modules with transactions, bulk insert, and error handling |
+| `databricks-lakebase` | Unified Databricks/Lakebase integration — intent discovery, connection setup, security (PKCE + token rotation), and typed data access patterns for all app types and stacks |
 
 ### Rules (auto-loaded on matching files)
 
 | File | Applies to | Purpose |
 |---|---|---|
-| `rules/databricks/activation.md` | `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.sql`, `.ipynb` | Tells Claude which skill to invoke based on project state |
+| `rules/databricks/activation.md` | `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.sql`, `.ipynb` | Tells Claude to invoke `databricks-lakebase` based on project state |
 | `rules/databricks/patterns.md` | `.py`, `.ipynb`, `.sql` | Coding constraints: connection patterns, parameterized queries, upserts, secrets |
 | `rules/databricks/frontend-api.md` | `.ts`, `.tsx`, `.js`, `.jsx` | Frontend constraint: OIDC OAuth → Data API only, never direct PostgreSQL |
 
@@ -42,8 +39,8 @@ claude plugin install ./claude-databricks-skill
 
 | Hook | Fires when | Does |
 |---|---|---|
-| `UserPromptSubmit` | Message shows intent to integrate with Databricks/Lakebase | First-time: prompts `databricks-architecture`; confirmed project: checks activation policy |
-| `PreToolUse` | Writing code with Databricks keywords (in confirmed projects) | Checks activation policy; detects frontend→fullstack transition |
+| `UserPromptSubmit` | Message shows intent to integrate with Databricks/Lakebase | Routes to `databricks-lakebase` with context (marker_exists, hostname_detected, or keyword_intent) |
+| `PreToolUse` | Writing code with Databricks keywords (in confirmed projects) | Routes to `databricks-lakebase` with context (transition or code_write) |
 
 ---
 
@@ -51,7 +48,7 @@ claude plugin install ./claude-databricks-skill
 
 ### Project marker
 
-When `databricks-architecture` runs, it creates a `.lakebase` file in the project root:
+When `databricks-lakebase` runs, it creates a `.lakebase` file in the project root:
 
 ```json
 { "app_type": "frontend", "stack": "typescript", "personal": false }
@@ -59,40 +56,45 @@ When `databricks-architecture` runs, it creates a `.lakebase` file in the projec
 
 This file:
 - Scopes hooks to confirmed Databricks projects (prevents false positives in unrelated projects)
-- Stores classification so downstream skills skip questions already answered
+- Stores classification so the skill skips questions already answered
 - Enables the transition hook to detect when a frontend app becomes fullstack
 
 ### Setup flow
 
 ```
 User mentions Databricks with setup intent
-  └─ Hook fires → invoke databricks-architecture
-       └─ Classifies app, asks stack + personal/team, writes .lakebase
-            └─ Invokes: databricks-connection
-                 └─ Generates connection boilerplate for your stack
-                      └─ Invokes: databricks-security
-                           └─ PKCE login, token rotation, security checklist
-                                └─ Invokes: databricks-data-patterns
-                                     └─ Asks about entities → generates typed query modules
+  └─ Hook fires → invoke databricks-lakebase
+       └─ Phase 0: Scans project (silent — no questions)
+       └─ Phase 1: Asks 1-2 questions (intent + workspace type)
+       └─ Phase 2: Presents plan, gets confirmation
+       └─ Phase 3: Generates connection boilerplate for your stack
+       └─ Phase 4: Adds security — PKCE login or token rotation
+       └─ Phase 5: Generates typed query modules for your entities
+       └─ Phase 6: Verification script + security checklist
 ```
+
+### Internal router
+
+The skill automatically determines where to start based on project state:
+- **First time** (no `.lakebase`) → full Phase 0-6
+- **Gap fill** (`.lakebase` exists, some layers missing) → starts at first gap
+- **Fast path** (user requests specific output) → jumps directly to relevant phase
+- **Re-entry** (connection + security exist, user wants new queries) → Phase 5 only
 
 ### Skill vs rules responsibility
 
 | Layer | Responsibility |
 |---|---|
 | **Rules** | Passive always-on constraints — how to write Databricks code correctly |
-| **Hooks** | Enforcement gates — ensure skills run before code is written |
-| **Skills** | Active setup wizards — ask questions, generate actual project files |
+| **Hooks** | Detection gates — ensure the skill runs before code is written |
+| **Skill** | Active setup wizard — discovers intent, plans, generates project files |
 
 ---
 
 ## Manual skill invocation
 
 ```
-/databricks-architecture
-/databricks-connection
-/databricks-security
-/databricks-data-patterns
+/databricks-lakebase
 ```
 
 ## Reset project classification

@@ -31,6 +31,4 @@ paths:
 
 ## Reference
 
-See skill: `databricks-connection` for stack-specific connection boilerplate.
-See skill: `databricks-security` for token rotation implementation.
-See skill: `databricks-data-patterns` for typed read/write query modules.
+See skill: `databricks-lakebase` for connection, security, and query patterns.
