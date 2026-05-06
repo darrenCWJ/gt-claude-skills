@@ -19,6 +19,12 @@ if ! echo "$prompt" | grep -qiE "databricks|lakebase"; then
   exit 0
 fi
 
+# If the user is explicitly rejecting or moving away from Databricks, stay silent.
+# e.g. "I don't want Databricks", "migrate from Databricks to Neon", "instead of Databricks"
+if echo "$prompt" | grep -qiP "(don'?t|not|no|instead of|avoid|replace|away from|switch(ing)? (from|away)|migrat(e|ing)? from).{0,40}(databricks|lakebase)|(databricks|lakebase).{0,40}(not|instead|alternative|replacement|no longer|remove|uninstall|drop)"; then
+  exit 0
+fi
+
 # Walk up the directory tree to find .lakebase (handles CWD != project root)
 lakebase_found=false
 dir="$PWD"
@@ -47,7 +53,7 @@ if echo "$prompt" | grep -qiE "cloud\.databricks\.com|azuredatabricks\.net|gcp\.
 fi
 
 # No .lakebase marker and no URL — only fire if prompt shows intent to connect/integrate.
-# Window widened to 120 chars to catch natural sentences where verb and keyword are far apart.
+# Window is 120 chars to catch natural sentences where verb and keyword are far apart.
 if echo "$prompt" | grep -qiP "(connect|integrat|link|set\s*up|configur|migrat|add|implement|build|use|need|want).{0,120}(databricks|lakebase)|(databricks|lakebase).{0,120}(connect|integrat|link|set\s*up|configur|migrat|add|implement|build|use|need|want)"; then
   printf "Databricks/Lakebase integration intent detected — no .lakebase marker found.\n"
   printf "Invoke the 'databricks-architecture' skill first to classify the app and create the project marker.\n"
