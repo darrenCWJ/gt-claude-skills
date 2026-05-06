@@ -359,10 +359,11 @@ export const api = {
 
 ```python
 # api/lakebase_proxy.py
+import os
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from auth.dependencies import get_current_user  # YOUR auth
-from auth.token_rotator import get_lakebase_token
+from auth.databricks_oauth import get_databricks_oauth_token  # see below
 
 router = APIRouter(prefix="/api/data")
 
@@ -374,7 +375,7 @@ async def proxy_to_data_api(
     params: dict | None = None,
     body: dict | None = None,
 ):
-    token = get_lakebase_token()  # service principal token
+    token = get_databricks_oauth_token()  # standard OAuth token, NOT PG credential
     async with httpx.AsyncClient() as client:
         res = await client.request(
             method,
@@ -404,19 +405,51 @@ async def delete_row(table: str, id: int, user=Depends(get_current_user)):
     return await proxy_to_data_api("DELETE", f"{table}?id=eq.{id}")
 ```
 
+**Databricks OAuth token helper (for Data API — NOT the PG credential rotator):**
+
+```python
+# auth/databricks_oauth.py
+import os
+import time
+import threading
+from databricks.sdk import WorkspaceClient
+
+_token: str | None = None
+_expiry: float = 0.0
+_lock = threading.Lock()
+
+def get_databricks_oauth_token() -> str:
+    """Get a Databricks OAuth token for Data API calls.
+    Uses service principal credentials (DATABRICKS_CLIENT_ID + SECRET).
+    This is different from generate_database_credential which is for PG wire protocol."""
+    global _token, _expiry
+    with _lock:
+        if time.time() >= _expiry - 60:
+            client = WorkspaceClient(
+                host=os.environ["DATABRICKS_HOST"],
+                client_id=os.environ["DATABRICKS_CLIENT_ID"],
+                client_secret=os.environ["DATABRICKS_CLIENT_SECRET"],
+            )
+            # The SDK handles OAuth token exchange automatically
+            token_response = client.config.authenticate()
+            _token = token_response["access_token"]
+            _expiry = time.time() + 3600  # tokens typically last 1 hour
+    return _token
+```
+
 **Backend proxy (TypeScript/Express example):**
 
 ```typescript
 // routes/data-proxy.ts
 import { Router } from 'express'
-import { getLakebaseToken } from '@/auth/token-rotator'
+import { getDatabricksOAuthToken } from '@/auth/databricks-oauth'
 import { requireAuth } from '@/middleware/auth' // YOUR auth middleware
 
 const router = Router()
 const DATA_API_BASE = process.env.LAKEBASE_DATA_API_URL!
 
 async function proxyToDataApi(method: string, path: string, body?: unknown) {
-  const token = getLakebaseToken()
+  const token = await getDatabricksOAuthToken()
   const res = await fetch(`${DATA_API_BASE}/public/${path}`, {
     method,
     headers: {
@@ -442,17 +475,20 @@ router.post('/:table', requireAuth, async (req, res) => {
 export default router
 ```
 
-**Env vars for external app backend:**
+**Env vars for external app using Data API:**
 
 ```env
 LAKEBASE_DATA_API_URL=<REST endpoint URL from Lakebase project → Data API tab>
 DATABRICKS_HOST=https://your-workspace.databricks.com
 DATABRICKS_CLIENT_ID=<service principal ID>
 DATABRICKS_CLIENT_SECRET=<service principal secret>
-LAKEBASE_ENDPOINT_PATH=projects/.../branches/.../endpoints/primary
 ```
 
-> Note: The service principal needs a Postgres role created via
+> Note: `LAKEBASE_ENDPOINT_PATH` is NOT needed for Data API — that's only for
+> PostgreSQL wire protocol connections. The Data API uses standard Databricks
+> OAuth tokens obtained via the SDK's `WorkspaceClient`.
+
+> The service principal needs a Postgres role created via
 > `SELECT databricks_create_role('<service-principal-application-id>', 'SERVICE_PRINCIPAL');`
 > and appropriate GRANT statements on the tables.
 
