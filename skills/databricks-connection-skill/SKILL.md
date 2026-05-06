@@ -10,7 +10,7 @@ description: >
   LAKEBASE_HOST, LAKEBASE_DB, LAKEBASE_USER, or LAKEBASE_OAUTH_TOKEN are being
   configured; user asks about Lakebase PostgreSQL endpoints.
   SKIP: databricks-architecture has not yet run — invoke that first.
-version: 3.0.0
+version: 3.1.0
 tags: [databricks, lakebase, postgresql, data-api, connection, oauth]
 ---
 
@@ -27,6 +27,13 @@ Then invoke `databricks-security` and `databricks-data-patterns`.
 > requests — meaning they reuse a token that may have expired. Use 1 connection
 > max or fetch-per-request to guarantee a fresh token is used. Do not raise this
 > to a higher value.
+
+> **Scale-to-zero reconnection**
+> Lakebase scales to zero when idle. The first connection after a cold start
+> incurs ~100ms delay and may raise `OperationalError` before the endpoint is
+> ready. All Python examples below use a 3-attempt retry with 200ms backoff
+> to handle this transparently. Scripts and long-running backends must include
+> this retry — a single `connect()` call will fail intermittently on cold starts.
 
 ---
 
@@ -94,33 +101,81 @@ dataApiFetch('').then(() => console.log('Data API reachable')).catch(console.err
 > Ask one question before generating code:
 >
 > "For your Lakebase backend, do you prefer:
-> 1. **psycopg2** (Python sync — Django, Flask, scripts)
-> 2. **asyncpg / psycopg3** (Python async — FastAPI, async scripts)
-> 3. **SQLAlchemy** (Python ORM)
-> 4. **Django ORM** (Django projects)
-> 5. **pg / node-postgres** (Node.js)
-> 6. **Prisma** (TypeScript ORM)
-> 7. **JDBC / HikariCP** (Java / Kotlin)"
+> 1. **psycopg3** (Python sync + async — recommended for new projects; `pip install 'psycopg[binary]'`)
+> 2. **psycopg2** (Python sync — existing/legacy projects)
+> 3. **asyncpg** (Python async — high-throughput FastAPI)
+> 4. **SQLAlchemy** (Python ORM)
+> 5. **Django ORM** (Django projects)
+> 6. **pg / node-postgres** (Node.js)
+> 7. **Prisma** (TypeScript ORM)
+> 8. **JDBC / HikariCP** (Java / Kotlin)"
 
 ---
 
-### Python — psycopg2 (sync)
+### Python — psycopg3 _(recommended for new projects)_
 
+> Install: `pip install "psycopg[binary]"`
+> psycopg3 provides both sync and async in one package.
+
+**Sync:**
 ```python
 # db/connection.py
 import os
-import psycopg2
+import time
+import psycopg  # psycopg3
 from auth.token_rotator import get_lakebase_token  # provided by databricks-security
 
-def get_conn() -> psycopg2.extensions.connection:
-    return psycopg2.connect(
-        host=os.environ["LAKEBASE_HOST"],
-        port=int(os.environ.get("LAKEBASE_PORT", "5432")),
-        dbname=os.environ["LAKEBASE_DB"],
-        user=os.environ["LAKEBASE_USER"],
-        password=get_lakebase_token(),  # fresh token per connection
-        sslmode="require",
-    )
+_CONNECT_PARAMS = lambda: dict(
+    host=os.environ["LAKEBASE_HOST"],
+    port=int(os.environ.get("LAKEBASE_PORT", "5432")),
+    dbname=os.environ["LAKEBASE_DB"],
+    user=os.environ["LAKEBASE_USER"],
+    password=get_lakebase_token(),
+    sslmode="require",
+)
+
+def get_conn() -> psycopg.Connection:
+    # Retry handles Lakebase scale-to-zero cold start (~100ms wakeup)
+    for attempt in range(3):
+        try:
+            return psycopg.connect(**_CONNECT_PARAMS())
+        except psycopg.OperationalError:
+            if attempt == 2:
+                raise
+            time.sleep(0.2 * (attempt + 1))
+```
+
+**Async (FastAPI):**
+```python
+# db/async_connection.py
+import os
+import asyncio
+import psycopg  # same package
+from auth.token_rotator import get_lakebase_token
+
+async def get_async_conn() -> psycopg.AsyncConnection:
+    for attempt in range(3):
+        try:
+            return await psycopg.AsyncConnection.connect(
+                host=os.environ["LAKEBASE_HOST"],
+                port=int(os.environ.get("LAKEBASE_PORT", "5432")),
+                dbname=os.environ["LAKEBASE_DB"],
+                user=os.environ["LAKEBASE_USER"],
+                password=get_lakebase_token(),
+                sslmode="require",
+            )
+        except psycopg.OperationalError:
+            if attempt == 2:
+                raise
+            await asyncio.sleep(0.2 * (attempt + 1))
+
+# FastAPI dependency
+async def get_db():
+    conn = await get_async_conn()
+    try:
+        yield conn
+    finally:
+        await conn.close()
 ```
 
 **Test:**
@@ -136,25 +191,72 @@ with get_conn() as conn:
 
 ---
 
-### Python — asyncpg (async — FastAPI)
+### Python — psycopg2 _(existing/legacy projects)_
+
+```python
+# db/connection.py
+import os
+import time
+import psycopg2
+from auth.token_rotator import get_lakebase_token  # provided by databricks-security
+
+def get_conn() -> psycopg2.extensions.connection:
+    for attempt in range(3):
+        try:
+            return psycopg2.connect(
+                host=os.environ["LAKEBASE_HOST"],
+                port=int(os.environ.get("LAKEBASE_PORT", "5432")),
+                dbname=os.environ["LAKEBASE_DB"],
+                user=os.environ["LAKEBASE_USER"],
+                password=get_lakebase_token(),
+                sslmode="require",
+            )
+        except psycopg2.OperationalError:
+            if attempt == 2:
+                raise
+            time.sleep(0.2 * (attempt + 1))
+```
+
+**Test:**
+```python
+# scripts/verify_connection.py
+from db.connection import get_conn
+
+with get_conn() as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT version()")
+        print("Connected:", cur.fetchone()[0])
+```
+
+---
+
+### Python — asyncpg _(high-throughput async)_
 
 > asyncpg does not support connection pools with OAuth — use per-request connections.
+> For most new async projects, psycopg3 async (above) is simpler and sufficient.
 
 ```python
 # db/async_connection.py
 import os
+import asyncio
 import asyncpg
 from auth.token_rotator import get_lakebase_token
 
 async def get_async_conn() -> asyncpg.Connection:
-    return await asyncpg.connect(
-        host=os.environ["LAKEBASE_HOST"],
-        port=int(os.environ.get("LAKEBASE_PORT", "5432")),
-        database=os.environ["LAKEBASE_DB"],
-        user=os.environ["LAKEBASE_USER"],
-        password=get_lakebase_token(),
-        ssl="require",
-    )
+    for attempt in range(3):
+        try:
+            return await asyncpg.connect(
+                host=os.environ["LAKEBASE_HOST"],
+                port=int(os.environ.get("LAKEBASE_PORT", "5432")),
+                database=os.environ["LAKEBASE_DB"],
+                user=os.environ["LAKEBASE_USER"],
+                password=get_lakebase_token(),
+                ssl="require",
+            )
+        except (asyncpg.TooManyConnectionsError, OSError):
+            if attempt == 2:
+                raise
+            await asyncio.sleep(0.2 * (attempt + 1))
 
 # FastAPI dependency
 async def get_db():
@@ -172,6 +274,7 @@ async def get_db():
 ```python
 # db/engine.py
 import os
+import time
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from auth.token_rotator import get_lakebase_token
@@ -187,7 +290,16 @@ def get_engine():
 
     @event.listens_for(engine, "do_connect")
     def provide_token(dialect, conn_rec, cargs, cparams):
+        # Inject fresh token and retry for scale-to-zero cold start
         cparams["password"] = get_lakebase_token()
+        for attempt in range(3):
+            try:
+                return dialect.dbapi.connect(*cargs, **cparams)
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+        return None  # unreachable
 
     return engine
 
