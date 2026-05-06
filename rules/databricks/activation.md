@@ -16,10 +16,18 @@ paths:
 
 ## databricks-architecture
 
-Invoke IMMEDIATELY when:
-- No Databricks connection layer exists in the project (first-time setup)
-- Backend files (`server.ts`, `app.py`, `main.go`, `Dockerfile`) appear in a project
-  that only has frontend Data API setup — app type has changed
+**Skip the full walkthrough and write `.lakebase` directly** if you can already determine
+from visible project files:
+- App type (e.g. FastAPI entrypoint = fullstack, SPA with no server = frontend)
+- Stack (e.g. requirements.txt = python, package.json = typescript)
+
+When skipping: write `.lakebase` with inferred values, then ask only what cannot be
+inferred — **personal vs team workspace** — before proceeding to `databricks-connection`.
+
+Invoke the full skill when:
+- App type is ambiguous (no entrypoint or config files visible)
+- This is a migration and the existing DB setup hasn't been reviewed
+- Backend files appear in a project previously classified as frontend-only
 
 ## databricks-connection
 

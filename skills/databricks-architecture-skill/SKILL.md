@@ -23,13 +23,25 @@ tags: [databricks, lakebase, architecture, migration]
 ## Purpose
 
 Classify the app and shape the architecture before any code is written.
-Always run this skill first. After classification, invoke follow-up skills in order.
+After classification, invoke follow-up skills in order.
+
+**If the codebase is already visible**, scan it before asking anything. Infer what you
+can from existing files — only ask questions you cannot answer from the code.
 
 ---
 
 ## Step 1 — Classify the App
 
-Determine which category applies. Ask if ambiguous.
+**Scan existing files first:**
+- `requirements.txt`, `pyproject.toml`, `package.json` → determines stack
+- `main.py`, `app.py`, `server.ts`, `manage.py`, `Dockerfile` → determines app type
+- Existing `DATABASE_URL`, ORM models, migration files → signals migration path
+
+If app type and stack are clear from the files, skip asking and go directly to
+Step 1.5 (write `.lakebase`) then Step 2 (credentials). Only ask about what
+cannot be determined from code.
+
+Determine which category applies. Ask only if ambiguous.
 
 **Frontend-only signals:**
 - Pure SPA (React, Vue, Angular, Svelte) with no server files
