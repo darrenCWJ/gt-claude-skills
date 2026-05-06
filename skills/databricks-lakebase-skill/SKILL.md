@@ -36,7 +36,10 @@ If `.lakebase` exists AND the user explicitly requests specific output
 
 If `.lakebase` exists AND connection + security files already exist AND user asks
 for a new entity or query pattern:
-- Enter at Phase 5 only
+- Determine connection type from existing files:
+  - `lib/lakebase-client.ts` or `lib/api-client.ts` → Data API patterns
+  - `db/connection.py` or `db/pool.ts` → PG wire patterns
+- Enter at Phase 5 with matching query style
 
 If `.lakebase` exists AND connection file exists but NO security layer:
 - Enter at Phase 4
@@ -111,7 +114,13 @@ Ask ONLY what cannot be determined from Phase 0. Maximum 2 questions.
 
 - Answer 2 → ask **Migration Follow-up** (below), then route accordingly
 - Answer 3 → jump to Phase 5
-- Answer 4 → ask what's broken, provide targeted fix (no full pipeline)
+- Answer 4 → ask what's broken, provide targeted fix (no full pipeline).
+  Recognized scenarios include:
+  - Broken connection / auth error → diagnose and fix
+  - Switch from Data API to PG wire (e.g. need transactions) → re-run Phase 3 with new method, update `.lakebase`
+  - Switch from PG wire to Data API (e.g. want simpler REST) → re-run Phase 3, update `.lakebase`
+  - Token rotation not working → fix Phase 4 security layer
+  - CORS issues with Data API → guide CORS configuration
 
 ### Migration Follow-up (ask only if Answer 2 selected)
 
@@ -128,12 +137,12 @@ Ask ONLY what cannot be determined from Phase 0. Maximum 2 questions.
 | Dual-run | Sync strategy doc, CDC or cron-based replication pattern, conflict resolution approach | `database-migrations` (for schema parity) |
 | Gradual migration | Per-table migration plan, dual-read routing pattern, expand-contract app changes | `database-migrations` (for safe schema changes) |
 
-Update `.lakebase` marker with migration context:
+Update `.lakebase` marker with migration context (keep actual app_type from Phase 0 scan):
 ```json
-{"app_type": "migration", "stack": "<stack>", "personal": <bool>, "migration_type": "one-time|dual-run|gradual", "source_db": "<detected or asked>"}
+{"app_type": "<scanned type>", "intent": "migrate", "migration_type": "one-time|dual-run|gradual", "source_db": "<detected or asked>", ...}
 ```
 
-### Question 2 — Hosting (ask if app_type is frontend or fullstack)
+### Question 2 — Hosting (ask for ALL app types)
 
 > "Where will this app be hosted?
 > 1. **Databricks Apps** — hosted inside the Databricks workspace (credentials auto-injected, user tokens forwarded via headers)
@@ -166,18 +175,39 @@ Ask if hosting is external (both audience types need credential setup):
 > "Is this your personal Databricks workspace, or a shared team/org workspace?
 > This determines credential setup — PAT for personal dev, service principal for production/teams."
 
+### Question 4 — Connection Method (ask for backend/fullstack/script if hosting is External)
+
+Skip for frontend-only apps (always Data API) and migrations (always PG wire for import).
+
+> "How should your backend connect to Lakebase?
+> 1. **PostgreSQL direct (recommended)** — full SQL, transactions, complex queries. Always available.
+> 2. **Data API (REST)** — simpler HTTP calls, no connection management, but limited to basic CRUD. Requires Data API enabled.
+> 3. **Not sure** — use PostgreSQL (you can switch to Data API later)"
+
+Default: **PostgreSQL direct** for backends. Data API is mainly for frontend-direct access.
+
 ### Auto-inferred (never ask):
 
-- **App type** — inferred from project structure
+- **App type** — inferred from project structure (Phase 0 scan)
 - **Stack** — inferred from package manager / entrypoint
-- **Driver preference** — asked later in Phase 3 (backend only)
+- **Driver preference** — asked later in Phase 3 (backend only, if PG wire chosen)
 
 ### After intent is clear:
 
-Write `.lakebase` marker:
+Write `.lakebase` marker (always include ALL fields, use `null` for not-applicable):
 
 ```json
-{"app_type": "<type>", "stack": "<stack>", "personal": <bool>, "hosting": "databricks-apps|external", "audience": "internal|external"}
+{
+  "app_type": "frontend|fullstack|backend|script",
+  "intent": "new|migrate|queries|fix",
+  "stack": "typescript|python|java|kotlin",
+  "hosting": "databricks-apps|external",
+  "audience": "internal|external|null",
+  "personal": true|false|null,
+  "connection_method": "data-api|pg-wire|both",
+  "migration_type": "one-time|dual-run|gradual|null",
+  "source_db": "postgres|mysql|sqlite|mongodb|null"
+}
 ```
 
 ---
@@ -1382,6 +1412,11 @@ DATABASE_URL=                        # postgresql://user@host/db?sslmode=require
 Skip this phase entirely if the user selected Intent 1, 3, or 4 in Phase 1.
 Enter here after Phase 3+4 are complete (connection + auth established to Lakebase).
 
+**Important:** Data migration ALWAYS uses PostgreSQL wire protocol for bulk import,
+even if the app will use Data API afterward. The Data API is not designed for bulk
+loading (one POST per row is too slow for thousands of rows). After migration
+completes, the app connects via its chosen method (Data API or PG wire).
+
 ### Detect Source Database
 
 Scan for existing database signals:
@@ -1670,6 +1705,15 @@ When all tables are in `MIGRATED_TABLES`:
 
 ## Phase 4c — Post-Migration Code Cleanup (only if Intent = Migrate)
 
+**When to run this phase:**
+- **One-time copy:** Run immediately after data is verified and app is switched over
+- **Dual-run:** Run ONLY after the user confirms full cutover to Lakebase (both databases may still be live — do NOT clean up prematurely)
+- **Gradual migration:** Run ONLY after ALL tables are migrated and user confirms cutover is complete
+
+Ask before proceeding:
+> "Has the migration fully completed? Are you ready to remove all references to the old database?
+> (If dual-run or gradual migration is still in progress, skip this phase for now.)"
+
 After data is migrated and verified, clean up the codebase to ensure all code
 uses Lakebase and nothing still references the legacy database.
 
@@ -1761,6 +1805,18 @@ grep -rn "SOURCE_DATABASE_URL\|OLD_DB_" --include="*.{py,ts,tsx,js,jsx}" .
 
 ## Phase 5 — Data Patterns
 
+### Route by Connection Method
+
+Before generating queries, check `.lakebase` for `connection_method` and `hosting`:
+
+| connection_method | hosting | Generate |
+|---|---|---|
+| `data-api` | `databricks-apps` | **Databricks Apps Data API queries** — token from `x-forwarded-access-token` header |
+| `data-api` | `external` | **Data API queries** — token from `tokenManager` (PKCE) or backend proxy |
+| `pg-wire` | `databricks-apps` | **PG queries** — use auto-injected credentials |
+| `pg-wire` | `external` | **PG queries** — use token rotator |
+| not set in marker | — | Check existing files: `lakebase-client.ts` → Data API; `connection.py`/`pool.ts` → PG wire. If neither exists, ask. |
+
 ### Step 1 — Discover Entities
 
 Scan for existing schema files, models, or migrations:
@@ -1786,6 +1842,35 @@ If nothing found, ask:
 > 5. Specific queries (describe)"
 
 ### Step 3 — Generate Query Files
+
+---
+
+### Databricks Apps — Query Modules (hosting = databricks-apps)
+
+Same as the Data API patterns below, but token comes from the request header
+instead of a token manager. The key difference in the client:
+
+```typescript
+// lib/lakebase-client.ts (Databricks Apps variant)
+const DATA_API_BASE = process.env.LAKEBASE_DATA_API_URL
+
+export async function dataApiFetch<T>(
+  path: string,
+  userToken: string,  // extracted from x-forwarded-access-token header
+  params?: Record<string, string>
+): Promise<T> {
+  const url = new URL(`${DATA_API_BASE}/public/${path}`)
+  if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${userToken}` },
+  })
+  if (!res.ok) throw new Error(`Data API ${res.status}: ${await res.text()}`)
+  return res.json() as Promise<T>
+}
+```
+
+Query modules are identical to the "Frontend — TypeScript Query Modules" below,
+except they pass `userToken` as a parameter instead of calling `tokenManager.getAccessToken()`.
 
 ---
 
