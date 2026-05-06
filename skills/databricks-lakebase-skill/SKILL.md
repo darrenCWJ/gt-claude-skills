@@ -133,7 +133,14 @@ Update `.lakebase` marker with migration context:
 {"app_type": "migration", "stack": "<stack>", "personal": <bool>, "migration_type": "one-time|dual-run|gradual", "source_db": "<detected or asked>"}
 ```
 
-### Question 2 — Workspace (ask only if not determinable from .env)
+### Question 2 — Workspace (backend/script only)
+
+Skip this question if app_type is `frontend` — frontend PKCE auth is identical
+regardless of workspace type. Just guide the user to register an OAuth app (or
+share the admin request template if they don't have workspace admin access).
+
+Ask only for backend/script/migration apps where the answer determines PAT vs
+service principal:
 
 > "Is this your personal Databricks workspace, or a shared team/org workspace?
 > This determines auth approach — PAT for personal, service principal for teams."
