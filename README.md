@@ -1,20 +1,20 @@
-# gt-claude-skills
+# claude-databricks-skill
 
-GovTech's Claude Code skills collection. Includes Databricks/Lakebase best-practice patterns
+GovTech's Claude Code skills for Databricks/Lakebase integration — best-practice patterns
 for connection, security, and data access across all app types.
 
 ## Install
 
 ```bash
-git clone https://github.com/darrenCWJ/gt-claude-skills
-claude plugin install ./gt-claude-skills
+git clone git@sgts.gitlab-dedicated.com:darren_chua/claude-databricks-skill.git
+claude plugin install ./claude-databricks-skill
 ```
 
 ## Update
 
 ```bash
-cd gt-claude-skills && git pull
-claude plugin install ./gt-claude-skills
+cd claude-databricks-skill && git pull
+claude plugin install ./claude-databricks-skill
 ```
 
 ---
