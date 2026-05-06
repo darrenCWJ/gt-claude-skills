@@ -133,14 +133,25 @@ Update `.lakebase` marker with migration context:
 {"app_type": "migration", "stack": "<stack>", "personal": <bool>, "migration_type": "one-time|dual-run|gradual", "source_db": "<detected or asked>"}
 ```
 
-### Question 2 — Workspace (backend/script only)
+### Question 2 — User Audience (ask if app_type is frontend or fullstack)
 
-Skip this question if app_type is `frontend` — frontend PKCE auth is identical
-regardless of workspace type. Just guide the user to register an OAuth app (or
-share the admin request template if they don't have workspace admin access).
+> "Who are the end users of this app?
+> 1. **Internal users with Databricks accounts** — team members who can log in to your Databricks workspace
+> 2. **External/public users** — people who do NOT have Databricks accounts (e.g. customers, students, public)"
 
-Ask only for backend/script/migration apps where the answer determines PAT vs
-service principal:
+**Routing:**
+
+| Audience | Auth architecture |
+|---|---|
+| Internal | Frontend → Databricks OAuth PKCE → Data API directly (users authenticate with their own Databricks identity) |
+| External | Frontend → your own auth (Google, email, etc.) → your backend → Data API via service principal token. End users never touch Databricks. |
+
+This determines whether the frontend talks to the Data API directly (PKCE) or through a backend proxy (service principal).
+
+### Question 3 — Workspace (backend/script/external apps)
+
+Ask if app_type is backend/script/migration, OR if audience is `external`
+(external frontend apps need a service principal, so workspace type matters):
 
 > "Is this your personal Databricks workspace, or a shared team/org workspace?
 > This determines auth approach — PAT for personal, service principal for teams."
@@ -156,7 +167,7 @@ service principal:
 Write `.lakebase` marker:
 
 ```json
-{"app_type": "<type>", "stack": "<stack>", "personal": <bool>}
+{"app_type": "<type>", "stack": "<stack>", "personal": <bool>, "audience": "internal|external"}
 ```
 
 ---
@@ -170,8 +181,9 @@ Present what will be generated. Wait for confirmation before writing any files.
 > | | |
 > |---|---|
 > | App type | [frontend / fullstack / script / migration] |
+> | Audience | [internal (Databricks users) / external (public users)] |
 > | Stack | [TypeScript / Python / Java / Kotlin] |
-> | Auth | [PKCE (frontend) / PAT auto-rotate (personal) / M2M (team)] |
+> | Auth | [PKCE (internal frontend) / Backend proxy + service principal (external frontend) / PAT auto-rotate (personal backend) / M2M (team backend)] |
 >
 > **Files to generate:**
 > 1. `[path]` — [purpose]
@@ -192,7 +204,17 @@ Do NOT generate files without confirmation.
 
 ### Frontend — Lakebase Data API Client
 
+Choose based on audience (determined in Phase 1 Question 2):
+
+- **Internal audience** → Frontend calls Data API directly via PKCE (below)
+- **External audience** → Frontend calls YOUR backend API, which proxies to Data API using a service principal token. Skip to **Frontend — External App (Backend Proxy)** below.
+
+---
+
+#### Frontend — Internal App (Direct Data API via PKCE)
+
 No PostgreSQL driver needed. Auth via Databricks OAuth PKCE.
+Users must have Databricks workspace accounts.
 
 > `tokenManager` is generated in Phase 4 — this file will have unresolved imports
 > until the security phase completes.
@@ -238,6 +260,149 @@ export async function dataApiMutate<T>(
   return res.status === 204 ? (undefined as T) : (res.json() as Promise<T>)
 }
 ```
+
+---
+
+#### Frontend — External App (Backend Proxy)
+
+For apps where end users do NOT have Databricks accounts. The frontend uses your
+own auth system; a thin backend proxies Data API calls using a service principal.
+
+```
+User → Your Auth (Google, email, etc.) → Your Backend → Lakebase Data API
+                                              ↓
+                                    Service principal OAuth token
+```
+
+**Frontend client (calls YOUR backend, not Data API directly):**
+
+```typescript
+// lib/api-client.ts
+const API_BASE = import.meta.env.VITE_API_BASE_URL // your backend
+
+async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}/${path}`, {
+    ...options,
+    headers: {
+      ...options?.headers,
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getSessionToken()}`, // YOUR app's auth token
+    },
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json() as Promise<T>
+}
+
+export const api = {
+  get: <T>(path: string) => apiFetch<T>(path),
+  post: <T>(path: string, body: unknown) =>
+    apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) }),
+  patch: <T>(path: string, body: unknown) =>
+    apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  delete: <T>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
+}
+```
+
+**Backend proxy (Python/FastAPI example):**
+
+```python
+# api/lakebase_proxy.py
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from auth.dependencies import get_current_user  # YOUR auth
+from auth.token_rotator import get_lakebase_token
+
+router = APIRouter(prefix="/api/data")
+
+DATA_API_BASE = os.environ["LAKEBASE_DATA_API_URL"]
+
+async def proxy_to_data_api(
+    method: str,
+    path: str,
+    params: dict | None = None,
+    body: dict | None = None,
+):
+    token = get_lakebase_token()  # service principal token
+    async with httpx.AsyncClient() as client:
+        res = await client.request(
+            method,
+            f"{DATA_API_BASE}/public/{path}",
+            params=params,
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if not res.is_success:
+        raise HTTPException(status_code=res.status_code, detail=res.text)
+    return res.json() if res.content else None
+
+@router.get("/{table}")
+async def list_rows(table: str, user=Depends(get_current_user)):
+    return await proxy_to_data_api("GET", table)
+
+@router.post("/{table}")
+async def create_row(table: str, body: dict, user=Depends(get_current_user)):
+    return await proxy_to_data_api("POST", table, body=body)
+
+@router.patch("/{table}")
+async def update_row(table: str, body: dict, id: int, user=Depends(get_current_user)):
+    return await proxy_to_data_api("PATCH", f"{table}?id=eq.{id}", body=body)
+
+@router.delete("/{table}")
+async def delete_row(table: str, id: int, user=Depends(get_current_user)):
+    return await proxy_to_data_api("DELETE", f"{table}?id=eq.{id}")
+```
+
+**Backend proxy (TypeScript/Express example):**
+
+```typescript
+// routes/data-proxy.ts
+import { Router } from 'express'
+import { getLakebaseToken } from '@/auth/token-rotator'
+import { requireAuth } from '@/middleware/auth' // YOUR auth middleware
+
+const router = Router()
+const DATA_API_BASE = process.env.LAKEBASE_DATA_API_URL!
+
+async function proxyToDataApi(method: string, path: string, body?: unknown) {
+  const token = getLakebaseToken()
+  const res = await fetch(`${DATA_API_BASE}/public/${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) throw new Error(`Data API ${res.status}: ${await res.text()}`)
+  return res.status === 204 ? null : res.json()
+}
+
+router.get('/:table', requireAuth, async (req, res) => {
+  const data = await proxyToDataApi('GET', req.params.table + '?' + new URLSearchParams(req.query as any))
+  res.json(data)
+})
+
+router.post('/:table', requireAuth, async (req, res) => {
+  const data = await proxyToDataApi('POST', req.params.table, req.body)
+  res.json(data)
+})
+
+export default router
+```
+
+**Env vars for external app backend:**
+
+```env
+LAKEBASE_DATA_API_URL=<REST endpoint URL from Lakebase project → Data API tab>
+DATABRICKS_HOST=https://your-workspace.databricks.com
+DATABRICKS_CLIENT_ID=<service principal ID>
+DATABRICKS_CLIENT_SECRET=<service principal secret>
+LAKEBASE_ENDPOINT_PATH=projects/.../branches/.../endpoints/primary
+```
+
+> Note: The service principal needs a Postgres role created via
+> `SELECT databricks_create_role('<service-principal-application-id>', 'SERVICE_PRINCIPAL');`
+> and appropriate GRANT statements on the tables.
 
 ---
 
