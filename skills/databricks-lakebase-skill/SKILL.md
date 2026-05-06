@@ -109,8 +109,29 @@ Ask ONLY what cannot be determined from Phase 0. Maximum 2 questions.
 > 3. **Add queries** — write data access code for tables (connection already exists)
 > 4. **Fix/update** — fix a broken connection, update auth, or resolve an error"
 
+- Answer 2 → ask **Migration Follow-up** (below), then route accordingly
 - Answer 3 → jump to Phase 5
 - Answer 4 → ask what's broken, provide targeted fix (no full pipeline)
+
+### Migration Follow-up (ask only if Answer 2 selected)
+
+> "How do you want to move data to Lakebase?
+> 1. **One-time copy** — dump source, load into Lakebase, then decommission the old database
+> 2. **Dual-run (replication)** — keep both databases running, sync data continuously or periodically
+> 3. **Gradual migration** — move table by table over time, with app reading from both during transition"
+
+**Routing:**
+
+| Choice | What to generate | Also invoke |
+|---|---|---|
+| One-time copy | Export script, import script, verification queries, cutover checklist | `database-migrations` (for schema adaptation) |
+| Dual-run | Sync strategy doc, CDC or cron-based replication pattern, conflict resolution approach | `database-migrations` (for schema parity) |
+| Gradual migration | Per-table migration plan, dual-read routing pattern, expand-contract app changes | `database-migrations` (for safe schema changes) |
+
+Update `.lakebase` marker with migration context:
+```json
+{"app_type": "migration", "stack": "<stack>", "personal": <bool>, "migration_type": "one-time|dual-run|gradual", "source_db": "<detected or asked>"}
+```
 
 ### Question 2 — Workspace (ask only if not determinable from .env)
 
@@ -545,8 +566,11 @@ Guide the user to the credentials they need.
 **Frontend path — Data API URL + OAuth App:**
 
 1. Log in to Databricks workspace
-2. Navigate to **Lakebase Postgres** → select project → **Data API** tab → copy base URL
-3. Register OAuth application:
+2. Navigate to **Lakebase** → select project → **Data API** tab
+3. Click **Enable Data API** (if not already enabled — this creates the `authenticator` role and exposes the `public` schema)
+4. Copy the **REST endpoint URL** (this is your `VITE_DATA_API_BASE_URL`)
+5. Configure **CORS** in Advanced Settings: add your app's domain (empty = allow all for dev)
+6. Register OAuth application:
    - If personal workspace: Workspace Settings → Security → OAuth Applications → Add
    - If team workspace: share instructions with admin (below)
 
@@ -591,7 +615,7 @@ Guide the user to the credentials they need.
 VITE_DATABRICKS_HOST=https://your-workspace.databricks.com
 VITE_DATABRICKS_CLIENT_ID=<from OAuth app>
 VITE_OAUTH_REDIRECT_URI=http://localhost:5173/auth/callback
-VITE_DATA_API_BASE_URL=https://your-workspace.databricks.com/api/2.0/lakebase/v1/projects/PROJECT_ID/data-api
+VITE_DATA_API_BASE_URL=<REST endpoint URL from Lakebase project → Data API tab>
 ```
 
 ### Backend env vars
@@ -935,6 +959,297 @@ LAKEBASE_USER=
 LAKEBASE_ENDPOINT_PATH=projects/.../branches/.../endpoints/primary
 DATABASE_URL=                        # postgresql://user@host/db?sslmode=require
 ```
+
+---
+
+## Phase 4b — Data Migration (only if Intent = Migrate)
+
+Skip this phase entirely if the user selected Intent 1, 3, or 4 in Phase 1.
+Enter here after Phase 3+4 are complete (connection + auth established to Lakebase).
+
+### Detect Source Database
+
+Scan for existing database signals:
+- `DATABASE_URL` in `.env` → parse dialect (postgres, mysql, sqlite)
+- `docker-compose.yml` → service names (postgres, mysql, mongo)
+- ORM config → connection strings, engine declarations
+- Existing migration files → tool + dialect
+
+If not detectable, ask:
+
+> "What's your current (source) database?
+> 1. **PostgreSQL** (Supabase, Neon, RDS, self-hosted)
+> 2. **MySQL / MariaDB**
+> 3. **SQLite**
+> 4. **MongoDB** (document → relational mapping needed)
+> 5. **Other** (describe)"
+
+---
+
+### Path A — One-Time Copy
+
+Full dump-and-load with cutover.
+
+**Step 1: Export from source**
+
+```bash
+# PostgreSQL → PostgreSQL (most common for Lakebase)
+pg_dump --no-owner --no-privileges --schema-only -f schema.sql "$SOURCE_DATABASE_URL"
+pg_dump --no-owner --no-privileges --data-only --format=csv -f data/ "$SOURCE_DATABASE_URL"
+
+# MySQL → PostgreSQL (requires schema translation)
+mysqldump --no-create-info --tab=/tmp/export --fields-terminated-by=',' source_db
+```
+
+**Step 2: Schema adaptation**
+
+> Invoke `database-migrations` skill for type mapping if source != PostgreSQL.
+
+Common type mappings (MySQL → Lakebase/PostgreSQL):
+
+| MySQL | PostgreSQL |
+|---|---|
+| `INT AUTO_INCREMENT` | `SERIAL` or `INTEGER GENERATED ALWAYS AS IDENTITY` |
+| `TINYINT(1)` | `BOOLEAN` |
+| `DATETIME` | `TIMESTAMP` |
+| `TEXT` / `LONGTEXT` | `TEXT` |
+| `ENUM(...)` | `TEXT CHECK (col IN (...))` or custom enum type |
+| `JSON` | `JSONB` |
+
+**Step 3: Import into Lakebase**
+
+```python
+# scripts/import_to_lakebase.py
+import csv
+import os
+from pathlib import Path
+from db.connection import get_conn
+
+DATA_DIR = Path("data/")
+
+def import_table(table_name: str, csv_path: Path) -> int:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            with open(csv_path) as f:
+                reader = csv.reader(f)
+                headers = next(reader)
+                cols = ", ".join(headers)
+                placeholders = ", ".join(["%s"] * len(headers))
+                rows = list(reader)
+                for i in range(0, len(rows), 1000):
+                    batch = rows[i:i+1000]
+                    cur.executemany(
+                        f"INSERT INTO {table_name} ({cols}) VALUES ({placeholders})",
+                        batch,
+                    )
+            conn.commit()
+    return len(rows)
+
+# Import tables in dependency order (parents before children)
+IMPORT_ORDER = ["users", "orders", "order_items"]  # adjust to your schema
+
+for table in IMPORT_ORDER:
+    csv_file = DATA_DIR / f"{table}.csv"
+    if csv_file.exists():
+        count = import_table(table, csv_file)
+        print(f"  {table}: {count} rows imported")
+```
+
+**Step 4: Verification**
+
+```python
+# scripts/verify_migration.py
+from db.connection import get_conn
+
+SOURCE_COUNTS = {
+    "users": 15234,       # fill from source: SELECT count(*) FROM users
+    "orders": 89012,
+    "order_items": 234567,
+}
+
+with get_conn() as conn:
+    with conn.cursor() as cur:
+        for table, expected in SOURCE_COUNTS.items():
+            cur.execute(f"SELECT count(*) FROM {table}")
+            actual = cur.fetchone()[0]
+            status = "PASS" if actual == expected else "FAIL"
+            print(f"  [{status}] {table}: expected={expected} actual={actual}")
+```
+
+**Step 5: Cutover checklist**
+
+- [ ] All tables imported with correct row counts
+- [ ] Foreign key constraints valid (no orphaned references)
+- [ ] Sequences reset to max(id) + 1 for each table
+- [ ] Application `.env` updated to point to Lakebase
+- [ ] Old database connection removed from app config
+- [ ] Tested app end-to-end against Lakebase
+- [ ] Old database kept read-only for 7 days as rollback safety net
+- [ ] Old database decommissioned after verification period
+
+---
+
+### Path B — Dual-Run (Replication)
+
+Both databases stay live. Writes go to source, replicated to Lakebase (or vice versa).
+
+**When to use:** Lakebase is for analytics/read replicas, or you're de-risking a migration by running both in parallel before cutting over.
+
+**Strategy options:**
+
+| Strategy | Latency | Complexity | Best for |
+|---|---|---|---|
+| CDC (Change Data Capture) | Near real-time | High | Production replication |
+| Scheduled sync (cron) | Minutes to hours | Low | Analytics, reporting |
+| Dual-write in app | Real-time | Medium | Small tables, critical data |
+
+**Option 1: Scheduled sync (simplest)**
+
+```python
+# scripts/sync_to_lakebase.py
+"""
+Cron-based sync: copies new/updated rows from source to Lakebase.
+Run via: cron every 5 min, or as a scheduled task.
+"""
+import os
+from datetime import datetime, timedelta
+from db.connection import get_conn as get_lakebase_conn
+import psycopg  # source connection
+
+SYNC_WINDOW = timedelta(minutes=10)  # overlap for safety
+
+def get_source_conn():
+    return psycopg.connect(os.environ["SOURCE_DATABASE_URL"])
+
+def sync_table(table: str, timestamp_col: str = "updated_at") -> int:
+    since = datetime.utcnow() - SYNC_WINDOW
+    with get_source_conn() as source:
+        with source.cursor() as cur:
+            cur.execute(
+                f"SELECT * FROM {table} WHERE {timestamp_col} >= %s",
+                (since,),
+            )
+            cols = [d.name for d in cur.description]
+            rows = cur.fetchall()
+
+    if not rows:
+        return 0
+
+    col_names = ", ".join(cols)
+    placeholders = ", ".join(["%s"] * len(cols))
+    conflict_cols = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c != "id")
+
+    with get_lakebase_conn() as dest:
+        with dest.cursor() as cur:
+            for row in rows:
+                cur.execute(
+                    f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) "
+                    f"ON CONFLICT (id) DO UPDATE SET {conflict_cols}",
+                    row,
+                )
+        dest.commit()
+    return len(rows)
+
+TABLES_TO_SYNC = ["users", "orders"]  # tables with updated_at column
+
+for table in TABLES_TO_SYNC:
+    count = sync_table(table)
+    print(f"  {table}: {count} rows synced")
+```
+
+**Option 2: Dual-write pattern (application-level)**
+
+```python
+# middleware/dual_write.py
+from db.connection import get_conn as get_lakebase_conn
+
+def dual_write(source_result, table: str, operation: str, data: dict):
+    """Call after successful write to source DB. Fire-and-forget to Lakebase."""
+    try:
+        with get_lakebase_conn() as conn:
+            with conn.cursor() as cur:
+                if operation == "insert":
+                    cols = ", ".join(data.keys())
+                    vals = ", ".join(["%s"] * len(data))
+                    cur.execute(
+                        f"INSERT INTO {table} ({cols}) VALUES ({vals}) ON CONFLICT (id) DO NOTHING",
+                        tuple(data.values()),
+                    )
+                elif operation == "update":
+                    set_clause = ", ".join(f"{k} = %s" for k in data if k != "id")
+                    cur.execute(
+                        f"UPDATE {table} SET {set_clause} WHERE id = %s",
+                        (*[v for k, v in data.items() if k != "id"], data["id"]),
+                    )
+    except Exception as e:
+        # Log but don't fail the primary write
+        logger.warning(f"Dual-write to Lakebase failed: {e}")
+```
+
+**Conflict resolution:** If both databases accept writes, define a winner:
+- Last-write-wins (by `updated_at`)
+- Source-is-primary (Lakebase is read-only replica)
+- Lakebase-is-primary (source becomes read-only, for gradual cutover)
+
+---
+
+### Path C — Gradual Migration
+
+Move table by table. App reads from both databases during transition.
+
+**Step 1: Migration order**
+
+Prioritize tables with no foreign key dependencies first:
+
+```
+Phase 1: Independent tables (users, categories, settings)
+Phase 2: Tables with FK to Phase 1 (orders → users)
+Phase 3: Join/junction tables (order_items → orders)
+```
+
+**Step 2: Dual-read router**
+
+```python
+# db/router.py
+import os
+from db.connection import get_conn as get_lakebase_conn
+import psycopg
+
+# Tables that have been migrated to Lakebase
+MIGRATED_TABLES = set(os.environ.get("MIGRATED_TABLES", "").split(","))
+
+def get_source_conn():
+    return psycopg.connect(os.environ["SOURCE_DATABASE_URL"])
+
+def get_read_conn(table: str):
+    """Route reads to Lakebase for migrated tables, source for others."""
+    if table in MIGRATED_TABLES:
+        return get_lakebase_conn()
+    return get_source_conn()
+
+def get_write_conn(table: str):
+    """Writes always go to the authoritative database for that table."""
+    if table in MIGRATED_TABLES:
+        return get_lakebase_conn()
+    return get_source_conn()
+```
+
+**Step 3: Per-table migration process**
+
+For each table:
+1. Copy schema to Lakebase (Phase 3 connection already exists)
+2. Bulk import existing data (Path A import script)
+3. Enable dual-write for that table
+4. Verify row counts match
+5. Add table to `MIGRATED_TABLES` env var
+6. Remove dual-write (Lakebase is now authoritative)
+
+**Step 4: Completion**
+
+When all tables are in `MIGRATED_TABLES`:
+- Remove the router — all reads/writes go to Lakebase
+- Remove `SOURCE_DATABASE_URL` from config
+- Decommission source database
 
 ---
 

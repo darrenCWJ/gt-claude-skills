@@ -26,6 +26,7 @@ claude plugin install ./claude-databricks-skill
 | Skill | Description |
 |---|---|
 | `databricks-lakebase` | Unified Databricks/Lakebase integration — intent discovery, connection setup, security (PKCE + token rotation), and typed data access patterns for all app types and stacks |
+| `database-migrations` | Database migration best practices — safe schema changes, zero-downtime deployments, expand-contract patterns across PostgreSQL, Prisma, Drizzle, Kysely, Django, and golang-migrate |
 
 ### Rules (auto-loaded on matching files)
 
