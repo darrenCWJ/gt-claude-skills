@@ -211,6 +211,156 @@ Do NOT generate files without confirmation.
 
 ---
 
+## Phase 2b — Credential Onboarding (MANDATORY before code generation)
+
+After the user confirms the plan, do NOT generate code yet. First, check what
+credentials they already have and walk them through obtaining what's missing.
+
+### Step 1 — Check Prerequisites
+
+Ask:
+
+> "Before I generate the code, let me make sure you have the Databricks/Lakebase
+> credentials ready. Do you already have:
+> 1. A Databricks workspace? (If no → guide to setup)
+> 2. A Lakebase project with tables created? (If no → guide to create)
+> 3. The Data API enabled? (If using Data API)
+> 4. A service principal or PAT configured? (If external hosting)"
+
+Do NOT assume they have these. If they say no to any, provide the step-by-step
+below before continuing.
+
+### Step 2 — Guided Setup (show only what's missing)
+
+#### If no Databricks workspace:
+
+> "You need a Databricks workspace first. Options:
+> - **Free trial:** Go to https://www.databricks.com/try-databricks
+> - **Organization account:** Ask your admin for workspace access
+> - **GovTech:** Check if your agency has an existing workspace
+>
+> Once you have workspace access, come back and I'll continue the setup."
+
+**STOP here** — do not generate code without a workspace.
+
+#### If no Lakebase project:
+
+> "Create a Lakebase project in your workspace:
+> 1. In Databricks, go to **Lakebase** (left sidebar)
+> 2. Click **Create Project**
+> 3. Name it (e.g., `hometongue-prod`)
+> 4. Once created, you'll see a project dashboard with connection details
+>
+> Do you have tables already, or do you need to create them too?"
+
+#### If Data API not enabled (frontend/fullstack apps):
+
+> "Enable the Data API on your Lakebase project:
+> 1. Go to your Lakebase project
+> 2. Click the **Data API** tab
+> 3. Click **Enable Data API**
+> 4. Copy the **REST endpoint URL** that appears — you'll need this
+>
+> What's the REST endpoint URL? (Paste it here and I'll wire it into the code)"
+
+#### If no service principal (external hosting + external users):
+
+> "Create a service principal for your app:
+> 1. In Databricks, go to **Settings → Identity & Access → Service principals**
+> 2. Click **Add service principal** → name it (e.g., `hometongue-app`)
+> 3. Click **Generate secret** — save both values immediately:
+>    - **Application ID** → this is your `DATABRICKS_CLIENT_ID`
+>    - **Client Secret** → this is your `DATABRICKS_CLIENT_SECRET`
+>    ⚠️ The secret is shown only once — copy it now!
+>
+> Then grant the service principal access to your Lakebase project:
+> 4. Go to your Lakebase project → **Settings → Permissions**
+> 5. Add the service principal with **Can use** permission
+>
+> Finally, create a Postgres role for it (run in the Lakebase SQL editor):
+> ```sql
+> CREATE EXTENSION IF NOT EXISTS databricks_auth;
+> SELECT databricks_create_role('<application-id>', 'SERVICE_PRINCIPAL');
+> GRANT USAGE ON SCHEMA public TO \"<application-id>\";
+> GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"<application-id>\";
+> GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO \"<application-id>\";
+> ```
+>
+> Paste your Application ID and I'll include it in the generated code."
+
+#### If no PAT (personal backend/script):
+
+> "Create a Personal Access Token:
+> 1. In Databricks, click your profile (top right) → **Settings**
+> 2. Go to **Developer → Access tokens**
+> 3. Click **Generate new token**
+> 4. Set scope to **`postgres`** (NOT `sql` — that's for SQL warehouses)
+> 5. Copy the token — this is your `DATABRICKS_TOKEN`
+>
+> Paste the token value and I'll wire it into the code."
+
+#### If using PKCE (external + internal users):
+
+> "Register an OAuth application for your frontend:
+> 1. In Databricks, go to **Settings → App connections** (or ask your admin)
+> 2. Click **Add application**
+> 3. Fill in:
+>    - **Name:** `your-app-name`
+>    - **Redirect URIs:** `http://localhost:5173/auth/callback`
+>      (add your production URL too, e.g., `https://yourapp.com/auth/callback`)
+>    - **Grant types:** Authorization Code
+>    - **Client type:** Public (no secret — PKCE handles security)
+> 4. Copy the **Client ID** — this is your `VITE_DATABRICKS_CLIENT_ID`
+>
+> Paste the Client ID and I'll wire it into the code."
+
+### Step 3 — Collect and Confirm Values
+
+Once the user has all credentials, collect them explicitly:
+
+> "Great! Let me confirm the values for your `.env` file:
+>
+> | Variable | Value | ✓ |
+> |---|---|---|
+> | `DATABRICKS_HOST` | [their workspace URL] | |
+> | `LAKEBASE_DATA_API_URL` | [their REST endpoint] | |
+> | `DATABRICKS_CLIENT_ID` | [their service principal ID] | |
+> | `DATABRICKS_CLIENT_SECRET` | [their secret] | |
+>
+> Does this look correct? I'll generate the code with these values wired in."
+
+**Important rules:**
+- NEVER generate code with placeholder values like `<your-workspace-url>` without
+  first attempting to collect the real values
+- If the user doesn't want to share secrets in chat, generate `.env.example` with
+  clear labels and tell them exactly which value goes where
+- If they don't have credentials yet, STOP and help them get set up first
+- Always explain WHERE each value comes from in the Databricks UI
+
+### Step 4 — Create .env file
+
+After collecting values, create or update the project's `.env` and `.env.example`:
+
+```bash
+# .env (NOT committed — add to .gitignore)
+DATABRICKS_HOST=https://actual-workspace.cloud.databricks.com
+LAKEBASE_DATA_API_URL=https://actual-endpoint.databricks.com/...
+DATABRICKS_CLIENT_ID=actual-id-here
+DATABRICKS_CLIENT_SECRET=actual-secret-here
+```
+
+```bash
+# .env.example (committed — shows structure without secrets)
+DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+LAKEBASE_DATA_API_URL=                # Lakebase project → Data API tab → REST endpoint
+DATABRICKS_CLIENT_ID=                 # Settings → Identity & Access → Service principals → Application ID
+DATABRICKS_CLIENT_SECRET=             # Service principal secret (generated once, save immediately)
+```
+
+Ensure `.env` is in `.gitignore` before proceeding to Phase 3.
+
+---
+
 ## Phase 3 — Connection Setup
 
 ### Frontend — Lakebase Data API Client
