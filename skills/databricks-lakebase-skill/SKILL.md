@@ -332,9 +332,14 @@ Once the user has all credentials, collect them explicitly:
 **Important rules:**
 - NEVER generate code with placeholder values like `<your-workspace-url>` without
   first attempting to collect the real values
+- **Exception:** If the user explicitly says they'll provide credentials later
+  (e.g. "I'll fill those in later", "skip credentials for now", "just generate
+  the code"), proceed with `.env.example` placeholders and clear labels showing
+  where each value comes from. Do not block progress.
 - If the user doesn't want to share secrets in chat, generate `.env.example` with
   clear labels and tell them exactly which value goes where
-- If they don't have credentials yet, STOP and help them get set up first
+- If they don't have credentials yet, STOP and help them get set up first —
+  unless they say to proceed anyway
 - Always explain WHERE each value comes from in the Databricks UI
 
 ### Step 4 — Create .env file
