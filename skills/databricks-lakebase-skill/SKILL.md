@@ -133,28 +133,38 @@ Update `.lakebase` marker with migration context:
 {"app_type": "migration", "stack": "<stack>", "personal": <bool>, "migration_type": "one-time|dual-run|gradual", "source_db": "<detected or asked>"}
 ```
 
-### Question 2 — User Audience (ask if app_type is frontend or fullstack)
+### Question 2 — Hosting (ask if app_type is frontend or fullstack)
 
-> "Who are the end users of this app?
-> 1. **Internal users with Databricks accounts** — team members who can log in to your Databricks workspace
-> 2. **External/public users** — people who do NOT have Databricks accounts (e.g. customers, students, public)"
+> "Where will this app be hosted?
+> 1. **Databricks Apps** — hosted inside the Databricks workspace (credentials auto-injected, user tokens forwarded via headers)
+> 2. **External** — hosted outside Databricks (Vercel, AWS, GCP, self-hosted, etc.)"
+
+**Routing:**
+
+| Hosting | What happens next |
+|---|---|
+| Databricks Apps | Skip most of Phase 4 — platform auto-injects `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` env vars, user tokens arrive in `x-forwarded-access-token` header. No manual auth code needed. |
+| External | Ask **Question 2b — Audience** (below) to determine auth approach |
+
+### Question 2b — Audience (ask only if hosting is External)
+
+> "Do the app's end users have Databricks workspace accounts?
+> 1. **Yes** — users can authenticate directly with Databricks (e.g. internal team tool)
+> 2. **No** — users are external/public (e.g. customers, students) and don't have Databricks accounts"
 
 **Routing:**
 
 | Audience | Auth architecture |
 |---|---|
-| Internal | Frontend → Databricks OAuth PKCE → Data API directly (users authenticate with their own Databricks identity) |
-| External | Frontend → your own auth (Google, email, etc.) → your backend → Data API via service principal token. End users never touch Databricks. |
+| Yes (internal) | Frontend → Databricks OAuth PKCE → Data API directly. Users log in with their Databricks identity. |
+| No (external) | Frontend → your own auth → your backend → Data API via service principal. End users never touch Databricks auth. |
 
-This determines whether the frontend talks to the Data API directly (PKCE) or through a backend proxy (service principal).
+### Question 3 — Workspace (ask if hosting is External)
 
-### Question 3 — Workspace (backend/script/external apps)
-
-Ask if app_type is backend/script/migration, OR if audience is `external`
-(external frontend apps need a service principal, so workspace type matters):
+Ask if hosting is external (both audience types need credential setup):
 
 > "Is this your personal Databricks workspace, or a shared team/org workspace?
-> This determines auth approach — PAT for personal, service principal for teams."
+> This determines credential setup — PAT for personal dev, service principal for production/teams."
 
 ### Auto-inferred (never ask):
 
@@ -167,7 +177,7 @@ Ask if app_type is backend/script/migration, OR if audience is `external`
 Write `.lakebase` marker:
 
 ```json
-{"app_type": "<type>", "stack": "<stack>", "personal": <bool>, "audience": "internal|external"}
+{"app_type": "<type>", "stack": "<stack>", "personal": <bool>, "hosting": "databricks-apps|external", "audience": "internal|external"}
 ```
 
 ---
@@ -181,9 +191,10 @@ Present what will be generated. Wait for confirmation before writing any files.
 > | | |
 > |---|---|
 > | App type | [frontend / fullstack / script / migration] |
-> | Audience | [internal (Databricks users) / external (public users)] |
+> | Hosting | [Databricks Apps / External] |
+> | Audience | [internal / external] (external hosting only) |
 > | Stack | [TypeScript / Python / Java / Kotlin] |
-> | Auth | [PKCE (internal frontend) / Backend proxy + service principal (external frontend) / PAT auto-rotate (personal backend) / M2M (team backend)] |
+> | Auth | [Auto (Databricks Apps) / PKCE (external + internal users) / Backend proxy + service principal (external + external users) / PAT (personal backend) / M2M (team backend)] |
 >
 > **Files to generate:**
 > 1. `[path]` — [purpose]
@@ -204,14 +215,55 @@ Do NOT generate files without confirmation.
 
 ### Frontend — Lakebase Data API Client
 
-Choose based on audience (determined in Phase 1 Question 2):
+Choose based on hosting + audience (determined in Phase 1):
 
-- **Internal audience** → Frontend calls Data API directly via PKCE (below)
-- **External audience** → Frontend calls YOUR backend API, which proxies to Data API using a service principal token. Skip to **Frontend — External App (Backend Proxy)** below.
+- **Databricks Apps** → Skip to **Frontend — Databricks Apps (Auto-Auth)** below
+- **External + internal users** → Frontend calls Data API directly via PKCE (below)
+- **External + external users** → Frontend calls YOUR backend API, which proxies to Data API. Skip to **Frontend — External App (Backend Proxy)** below.
 
 ---
 
-#### Frontend — Internal App (Direct Data API via PKCE)
+#### Frontend — Databricks Apps (Auto-Auth)
+
+No manual auth code needed. Databricks auto-injects credentials and forwards user tokens.
+
+```typescript
+// lib/lakebase-client.ts
+// In Databricks Apps, user token arrives via x-forwarded-access-token header.
+// For server-side (backend-for-frontend within the app):
+
+const DATA_API_BASE = process.env.LAKEBASE_DATA_API_URL
+
+export async function dataApiFetch<T>(
+  path: string,
+  userToken: string,
+  params?: Record<string, string>
+): Promise<T> {
+  const url = new URL(`${DATA_API_BASE}/public/${path}`)
+  if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${userToken}` },
+  })
+  if (!res.ok) throw new Error(`Data API ${res.status}: ${await res.text()}`)
+  return res.json() as Promise<T>
+}
+
+// In your request handler, extract the forwarded token:
+// const userToken = req.headers['x-forwarded-access-token']
+// const data = await dataApiFetch('users', userToken)
+```
+
+**Env vars (auto-injected by Databricks Apps — no manual setup):**
+- `DATABRICKS_CLIENT_ID` — service principal client ID (for app-level operations)
+- `DATABRICKS_CLIENT_SECRET` — service principal secret (for app-level operations)
+
+**For user-level operations:** Extract `x-forwarded-access-token` from incoming request headers and pass it to the Data API. This preserves the user's identity for RLS policies.
+
+**For app-level operations (background tasks, shared data):** Use the auto-injected service principal credentials with the token rotator pattern from Phase 4.
+
+---
+
+#### Frontend — External Hosting + Internal Users (Direct Data API via PKCE)
 
 No PostgreSQL driver needed. Auth via Databricks OAuth PKCE.
 Users must have Databricks workspace accounts.
