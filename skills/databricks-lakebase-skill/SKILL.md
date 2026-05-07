@@ -255,7 +255,8 @@ Ask:
 > 1. A Databricks workspace? (If no → guide to setup)
 > 2. A Lakebase project with tables created? (If no → guide to create)
 > 3. The Data API enabled? (If using Data API)
-> 4. A service principal or PAT configured? (If external hosting)"
+> 4. A service principal or PAT configured? (If external hosting)
+> 5. Which **schema** are your tables in? (e.g., `app`, `api`, `myproject` — using `public` is not recommended)"
 
 Do NOT assume they have these. If they say no to any, provide the step-by-step
 below before continuing.
@@ -311,10 +312,11 @@ below before continuing.
 > ```sql
 > CREATE EXTENSION IF NOT EXISTS databricks_auth;
 > SELECT databricks_create_role('<application-id>', 'SERVICE_PRINCIPAL');
-> GRANT USAGE ON SCHEMA public TO \"<application-id>\";
-> GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"<application-id>\";
-> GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO \"<application-id>\";
+> GRANT USAGE ON SCHEMA <schema> TO \"<application-id>\";
+> GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA <schema> TO \"<application-id>\";
+> GRANT USAGE ON ALL SEQUENCES IN SCHEMA <schema> TO \"<application-id>\";
 > ```
+> ⚠️ Replace `<schema>` with the user's chosen schema (e.g., `app`). Do NOT default to `public`.
 >
 > Paste your Application ID and I'll include it in the generated code."
 
@@ -344,6 +346,30 @@ below before continuing.
 >
 > Paste the Client ID and I'll wire it into the code."
 
+#### Schema selection (ask ALL users):
+
+> "Which database schema are your tables in?
+> - Best practice is to use a **dedicated schema** (e.g., `app`, `api`, `myproject`)
+> - Avoid `public` — it's the default but mixes your application tables with system/extension objects
+> - If you haven't created a schema yet, ask your Databricks admin to create one, or if you have permissions, run this in the Lakebase SQL editor:
+>   ```sql
+>   CREATE SCHEMA app;
+>   ```
+>   Then create your tables inside it (e.g., `app.users`, `app.orders`)
+>
+> What schema name should I use in the generated code?
+> (If you're unsure or need admin help, let me know and I can provide the SQL for your admin to run.)"
+
+**If the user doesn't know or needs admin help:**
+> "No problem. Here's what to send your Databricks admin:
+> 1. Ask them to create a schema: `CREATE SCHEMA <your_preferred_name>;`
+> 2. Ask them to grant you access: `GRANT ALL ON SCHEMA <name> TO \"<your-role>\";`
+> 3. Come back with the schema name once it's ready, or tell me to use `public` for now."
+
+If the user says `public`, accept it but note: "I'll use `public` — consider migrating to a dedicated schema later for cleaner separation."
+
+Store the schema name for use in all generated Data API paths and SQL grants.
+
 ### Step 3 — Collect and Confirm Values
 
 Once the user has all credentials, collect them explicitly:
@@ -354,6 +380,7 @@ Once the user has all credentials, collect them explicitly:
 > |---|---|---|
 > | `DATABRICKS_HOST` | [their workspace URL] | |
 > | `LAKEBASE_DATA_API_URL` | [their REST endpoint] | |
+> | `LAKEBASE_SCHEMA` | [their schema name, e.g. `app`] | |
 > | `DATABRICKS_CLIENT_ID` | [their service principal ID] | |
 > | `DATABRICKS_CLIENT_SECRET` | [their secret] | |
 >
@@ -418,13 +445,14 @@ No manual auth code needed. Databricks auto-injects credentials and forwards use
 // For server-side (backend-for-frontend within the app):
 
 const DATA_API_BASE = process.env.LAKEBASE_DATA_API_URL
+const SCHEMA = process.env.LAKEBASE_SCHEMA ?? 'public'
 
 export async function dataApiFetch<T>(
   path: string,
   userToken: string,
   params?: Record<string, string>
 ): Promise<T> {
-  const url = new URL(`${DATA_API_BASE}/public/${path}`)
+  const url = new URL(`${DATA_API_BASE}/${SCHEMA}/${path}`)
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${userToken}` },
@@ -553,6 +581,7 @@ from auth.databricks_oauth import get_databricks_oauth_token  # see below
 router = APIRouter(prefix="/api/data")
 
 DATA_API_BASE = os.environ["LAKEBASE_DATA_API_URL"]
+SCHEMA = os.environ.get("LAKEBASE_SCHEMA", "public")
 
 async def proxy_to_data_api(
     method: str,
@@ -564,7 +593,7 @@ async def proxy_to_data_api(
     async with httpx.AsyncClient() as client:
         res = await client.request(
             method,
-            f"{DATA_API_BASE}/public/{path}",
+            f"{DATA_API_BASE}/{SCHEMA}/{path}",
             params=params,
             json=body,
             headers={"Authorization": f"Bearer {token}"},
@@ -632,10 +661,11 @@ import { requireAuth } from '@/middleware/auth' // YOUR auth middleware
 
 const router = Router()
 const DATA_API_BASE = process.env.LAKEBASE_DATA_API_URL!
+const SCHEMA = process.env.LAKEBASE_SCHEMA ?? 'public'
 
 async function proxyToDataApi(method: string, path: string, body?: unknown) {
   const token = await getDatabricksOAuthToken()
-  const res = await fetch(`${DATA_API_BASE}/public/${path}`, {
+  const res = await fetch(`${DATA_API_BASE}/${SCHEMA}/${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1012,7 +1042,7 @@ Guide the user to the credentials they need.
 
 1. Log in to Databricks workspace
 2. Navigate to **Lakebase** → select project → **Data API** tab
-3. Click **Enable Data API** (if not already enabled — this creates the `authenticator` role and exposes the `public` schema)
+3. Click **Enable Data API** (if not already enabled — this creates the `authenticator` role and exposes schemas via REST)
 4. Copy the **REST endpoint URL** (this is your `VITE_DATA_API_BASE_URL`)
 5. Configure **CORS** in Advanced Settings: add your app's domain (empty = allow all for dev)
 6. Register OAuth application:
@@ -1853,13 +1883,14 @@ instead of a token manager. The key difference in the client:
 ```typescript
 // lib/lakebase-client.ts (Databricks Apps variant)
 const DATA_API_BASE = process.env.LAKEBASE_DATA_API_URL
+const SCHEMA = process.env.LAKEBASE_SCHEMA ?? 'public'
 
 export async function dataApiFetch<T>(
   path: string,
   userToken: string,  // extracted from x-forwarded-access-token header
   params?: Record<string, string>
 ): Promise<T> {
-  const url = new URL(`${DATA_API_BASE}/public/${path}`)
+  const url = new URL(`${DATA_API_BASE}/${SCHEMA}/${path}`)
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${userToken}` },
@@ -1901,11 +1932,11 @@ export async function getAll[Entities](filters?: {
     limit: String(filters?.limit ?? 20),
   }
   if (filters?.afterId) params['id'] = `gt.${filters.afterId}`
-  return dataApiFetch<[Entity][]>('public/[entity]', params)
+  return dataApiFetch<[Entity][]>('[entity]', params)
 }
 
 export async function get[Entity]ById(id: number): Promise<[Entity] | null> {
-  const rows = await dataApiFetch<[Entity][]>('public/[entity]', {
+  const rows = await dataApiFetch<[Entity][]>('[entity]', {
     id: `eq.${id}`,
     limit: '1',
   })
@@ -1914,7 +1945,7 @@ export async function get[Entity]ById(id: number): Promise<[Entity] | null> {
 
 export async function create[Entity](data: Omit<[Entity], 'id'>): Promise<[Entity]> {
   const [created] = await dataApiMutate<[Entity][]>(
-    'public/[entity]',
+    '[entity]',
     'POST',
     data,
     'return=representation'
@@ -1926,11 +1957,11 @@ export async function update[Entity](
   id: number,
   data: Partial<Omit<[Entity], 'id'>>
 ): Promise<void> {
-  await dataApiMutate('public/[entity]?id=eq.' + id, 'PATCH', data)
+  await dataApiMutate('[entity]?id=eq.' + id, 'PATCH', data)
 }
 
 export async function delete[Entity](id: number): Promise<void> {
-  await dataApiMutate('public/[entity]?id=eq.' + id, 'DELETE')
+  await dataApiMutate('[entity]?id=eq.' + id, 'DELETE')
 }
 ```
 
@@ -1940,7 +1971,7 @@ export async function bulkCreate[Entities](
   items: Omit<[Entity], 'id'>[]
 ): Promise<[Entity][]> {
   return dataApiMutate<[Entity][]>(
-    'public/[entity]',
+    '[entity]',
     'POST',
     items,
     'return=representation'
