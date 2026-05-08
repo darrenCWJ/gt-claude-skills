@@ -124,18 +124,27 @@ Ask ONLY what cannot be determined from Phase 0. Maximum 2 questions.
 
 ### Migration Follow-up (ask only if Answer 2 selected)
 
-> "How do you want to move data to Lakebase?
-> 1. **One-time copy** — dump source, load into Lakebase, then decommission the old database
-> 2. **Dual-run (replication)** — keep both databases running, sync data continuously or periodically
-> 3. **Gradual migration** — move table by table over time, with app reading from both during transition"
+> "How do you want to move your data to Lakebase?
+> 1. **Start fresh** — no existing data to move, just create new tables in Lakebase
+> 2. **Copy everything at once** — move all data from old database to Lakebase, then switch over
+> 3. **Keep both running** — run old and new databases side by side, syncing data between them
+> 4. **Move table by table** — migrate one table at a time while the app reads from both during transition"
+
+#### Follow-up for option 3 (ask only if "Keep both running" selected)
+
+> "Which database will be your final destination?
+> 1. **Lakebase** — sync from old → Lakebase, then drop the old database once verified
+> 2. **Keep both permanently** — Lakebase as a read replica for analytics, old DB stays as primary"
 
 **Routing:**
 
 | Choice | What to generate | Also invoke |
 |---|---|---|
-| One-time copy | Export script, import script, verification queries, cutover checklist | `database-migrations` (for schema adaptation) |
-| Dual-run | Sync strategy doc, CDC or cron-based replication pattern, conflict resolution approach | `database-migrations` (for schema parity) |
-| Gradual migration | Per-table migration plan, dual-read routing pattern, expand-contract app changes | `database-migrations` (for safe schema changes) |
+| Start fresh | Schema creation scripts (ORM or raw SQL), `.env` setup | None |
+| Copy everything at once | Export script, import script, verification queries, cutover checklist | `database-migrations` (for schema adaptation) |
+| Keep both running (→ Lakebase) | Sync strategy, replication pattern, cutover plan for when to drop old DB | `database-migrations` (for schema parity) |
+| Keep both running (→ permanent) | Sync strategy, CDC or cron-based replication pattern, conflict resolution approach | `database-migrations` (for schema parity) |
+| Move table by table | Per-table migration plan, dual-read routing pattern, expand-contract app changes | `database-migrations` (for safe schema changes) |
 
 Update `.lakebase` marker with migration context (keep actual app_type from Phase 0 scan):
 ```json
@@ -1466,6 +1475,55 @@ If not detectable, ask:
 
 ---
 
+### Migration Scope Scan (MANDATORY before any export/import)
+
+Before starting the migration, connect to the source database and scan its contents.
+Present the results to the user so they know exactly what will be migrated.
+
+**Run against the source database:**
+
+```sql
+-- PostgreSQL: list all user tables with row counts
+SELECT
+  schemaname || '.' || relname AS table_name,
+  n_live_tup AS row_count
+FROM pg_stat_user_tables
+ORDER BY n_live_tup DESC;
+
+-- MySQL: list all tables with row counts
+SELECT
+  table_name,
+  table_rows AS row_count
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+ORDER BY table_rows DESC;
+
+-- SQLite: list tables (row counts require per-table COUNT(*))
+SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';
+```
+
+**Present to the user:**
+
+> "Here's what will be migrated from your source database:
+>
+> | Table | Rows |
+> |-------|------|
+> | users | 15,234 |
+> | orders | 89,012 |
+> | order_items | 234,567 |
+> | categories | 48 |
+> | settings | 12 |
+>
+> **Total:** 5 tables, 338,873 rows
+>
+> Would you like to proceed with migrating all tables, or exclude any?"
+
+**If user excludes tables:** Record which tables to skip and only migrate the rest.
+
+**If user proceeds:** Continue to the selected migration path below.
+
+---
+
 ### Path A — One-Time Copy
 
 Full dump-and-load with cutover.
@@ -1535,10 +1593,12 @@ for table in IMPORT_ORDER:
         print(f"  {table}: {count} rows imported")
 ```
 
-**Step 4: Verification**
+**Step 4: Row Count Verification**
+
+After import, run row count checks and present results directly to the user:
 
 ```python
-# scripts/verify_migration.py
+# Run this — do NOT give it to the user to execute
 from db.connection import get_conn
 
 SOURCE_COUNTS = {
@@ -1556,14 +1616,77 @@ with get_conn() as conn:
             print(f"  [{status}] {table}: expected={expected} actual={actual}")
 ```
 
-**Step 5: Cutover checklist**
+Present results to the user:
+
+> "Row count verification:
+>   [PASS] users: expected=15,234 actual=15,234
+>   [PASS] orders: expected=89,012 actual=89,012
+>   [PASS] order_items: expected=234,567 actual=234,567
+>
+> All tables match."
+
+If any FAIL: investigate before proceeding.
+
+---
+
+**Step 5: Live Connection Verification (Interactive)**
+
+After the app's `.env` is updated to point to Lakebase, ask:
+
+> "Would you like to verify that your app is actually pulling data from Lakebase?
+> I'll insert a temporary test row into Lakebase, you check if it shows up in your
+> app and in Databricks, then I'll delete it. No trace left afterward."
+
+**If user says yes:**
+
+1. Insert a canary row directly into Lakebase:
+
+```sql
+INSERT INTO <first_table> (<text_column>)
+VALUES ('__lakebase_migration_verify__');
+```
+
+2. Tell the user what to check:
+
+> "I've inserted a test row with the value `__lakebase_migration_verify__` into
+> the `<table>` table. Please check:
+>
+> 1. **Your app** — does the test row appear? (e.g. refresh the list page)
+> 2. **Databricks UI** — go to your Lakebase project → SQL editor → run:
+>    ```sql
+>    SELECT * FROM <schema>.<table> WHERE <column> = '__lakebase_migration_verify__';
+>    ```
+>
+> Can you see it in both places?"
+
+3. Wait for user confirmation.
+
+4. **If user confirms yes:** Delete the canary row and continue.
+
+```sql
+DELETE FROM <first_table> WHERE <text_column> = '__lakebase_migration_verify__';
+```
+
+> "Test row deleted. Your app is confirmed reading from Lakebase."
+
+5. **If user says no (not visible in app):** The app is still pointing to the old
+   database. Diagnose:
+   - Check `.env` — is `DATABASE_URL` / `LAKEBASE_HOST` correct?
+   - Was the app restarted after env change?
+   - Is the connection file importing the Lakebase connection or the old one?
+
+**If user says no (skip verification):** Proceed to cutover checklist.
+
+---
+
+**Step 6: Cutover checklist**
 
 - [ ] All tables imported with correct row counts
+- [ ] Live verification passed (app reads from Lakebase)
 - [ ] Foreign key constraints valid (no orphaned references)
 - [ ] Sequences reset to max(id) + 1 for each table
 - [ ] Application `.env` updated to point to Lakebase
 - [ ] Old database connection removed from app config
-- [ ] Tested app end-to-end against Lakebase
 - [ ] Old database kept read-only for 7 days as rollback safety net
 - [ ] Old database decommissioned after verification period
 
