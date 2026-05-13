@@ -1,0 +1,13 @@
+{
+  "name": "cdo-databricks",
+  "description": "GovTech CDO Databricks/Lakebase skills for Claude Code. Includes connection setup, security patterns, data access generation, and database migrations.",
+  "author": {
+    "name": "GovTech CDO"
+  },
+  "skills": [
+    "./skills/"
+  ],
+  "rules": [
+    "./rules/"
+  ]
+}
