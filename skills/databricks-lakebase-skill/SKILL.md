@@ -2078,7 +2078,7 @@ Ask:
 
 > "Final check — have you:
 >
-> 1. **Pushed your code** to your web deployment? (e.g. `git push` → Vercel/Netlify/Databricks Apps/AWS/RabbitDeploy)
+> 1. **Pushed your code** to your web deployment? (e.g. `git push` → Vercel/Netlify/Databricks Apps/AWS/RabbitDeploy/GitLab CI)
 > 2. **Updated your production environment variables?**
 >    - Lakebase connection vars (`LAKEBASE_HOST`, `LAKEBASE_TOKEN`, etc.)
 >    - Sync table vars (if applicable: `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_SQL_WAREHOUSE_ID`)
@@ -2119,7 +2119,7 @@ Guide them through whichever step is missing:
   If yes, run `git add` (relevant files only), `git commit`, and `git push` for them.
 - If env vars not updated: guide them to their hosting platform's env var settings
   (Vercel → Settings → Environment Variables, Databricks Apps → app.yaml secrets,
-  RabbitDeploy → dashboard env config, etc.)
+  RabbitDeploy → dashboard env config, GitLab → Settings → CI/CD → Variables, etc.)
 
 **If user is unsure about env vars:** List exactly which vars need to be set in
 production based on the `.env` file generated during this integration:
