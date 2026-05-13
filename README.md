@@ -1,21 +1,60 @@
-# claude-databricks-skill
+# gt-claude-skills
 
 GovTech's Claude Code skills for Databricks/Lakebase integration — best-practice patterns
 for connection, security, and data access across all app types.
 
 ## Install
 
+### Option A: Git clone (recommended)
+
 ```bash
-git clone git@sgts.gitlab-dedicated.com:darren_chua/claude-databricks-skill.git
-claude plugin install ./claude-databricks-skill
+git clone https://github.com/darrenCWJ/gt-claude-skills.git
 ```
+
+### Option B: Download ZIP (if you cannot clone)
+
+1. Go to <https://github.com/darrenCWJ/gt-claude-skills>
+2. Click **Code → Download ZIP**
+3. Extract the ZIP to a folder (e.g. `~/gt-claude-skills`)
+
+---
+
+### Terminal (Claude Code CLI)
+
+Load the plugin for the current session:
+
+```bash
+claude --plugin-dir ./gt-claude-skills
+```
+
+Or load directly from a ZIP file (requires Claude Code v2.1.128+):
+
+```bash
+claude --plugin-dir ./gt-claude-skills.zip
+```
+
+### VS Code (Claude Code extension)
+
+1. Open VS Code with the Claude Code extension installed
+2. In the Claude Code chat, type `/plugins`
+3. Click **Add local plugin**
+4. Select the `gt-claude-skills` folder you cloned or extracted
+
+Both the CLI and VS Code share the same plugin system — a plugin installed in one is available in the other.
+
+---
 
 ## Update
 
+### If installed via git clone
+
 ```bash
-cd claude-databricks-skill && git pull
-claude plugin install ./claude-databricks-skill
+cd gt-claude-skills && git pull
 ```
+
+### If installed via ZIP
+
+Re-download the latest ZIP from GitHub, extract it, and replace the old folder.
 
 ---
 
