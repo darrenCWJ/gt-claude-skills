@@ -1956,6 +1956,183 @@ grep -rn "SOURCE_DATABASE_URL\|OLD_DB_" --include="*.{py,ts,tsx,js,jsx}" .
 
 ---
 
+## Phase 4d — Lakehouse Sync Tables & Deployment Verification (only if Intent = Migrate)
+
+After migration is complete and the app is reading/writing from Lakebase, handle two
+final concerns: sync table connectivity and production deployment confirmation.
+
+### Step 1 — Sync Table Check
+
+Lakebase data automatically syncs to Lakehouse as Delta tables. However, admins may
+create additional **sync tables** (materialized views, aggregated tables, or curated
+datasets) in Lakehouse that the app should read from for specific use cases
+(dashboards, reports, analytics queries within the app).
+
+Ask:
+
+> "Now that your app is connected to Lakebase for reads and writes, one more thing:
+>
+> Has your Databricks admin set up any **sync tables** in Lakehouse that your app
+> needs to read from? (These are curated tables in the Lakehouse that aggregate or
+> transform your Lakebase data — commonly used for analytics, dashboards, or
+> reporting features within the app.)
+>
+> If you're not sure, check with your workspace admin before proceeding."
+
+**If user says yes:**
+
+1. Ask which tables they need to connect to:
+
+> "Which Lakehouse sync tables does your app need to read from?
+> Please provide:
+> - Catalog name (e.g. `main`)
+> - Schema name (e.g. `analytics`)
+> - Table names (e.g. `daily_order_summary`, `user_activity_agg`)
+>
+> Example: `main.analytics.daily_order_summary`"
+
+2. Determine the access method based on the app's hosting:
+
+| Hosting | Sync Table Access Method |
+|---|---|
+| Databricks Apps | Databricks SQL via SDK (uses app service principal) |
+| External (Vercel, AWS, etc.) | Databricks SQL via REST API or JDBC with PAT/M2M token |
+| Backend script | Databricks SDK or `databricks-sql-connector` |
+
+3. Generate the sync table reader:
+
+**Python (databricks-sql-connector):**
+```python
+# db/lakehouse_reader.py
+import os
+from databricks import sql as databricks_sql
+
+def get_lakehouse_conn():
+    return databricks_sql.connect(
+        server_hostname=os.environ["DATABRICKS_HOST"],
+        http_path=os.environ["DATABRICKS_SQL_WAREHOUSE_PATH"],
+        access_token=os.environ["DATABRICKS_TOKEN"],
+    )
+
+def read_sync_table(full_table_name: str, limit: int = 1000) -> list[dict]:
+    with get_lakehouse_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM {full_table_name} LIMIT {limit}")
+            cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+```
+
+**TypeScript (Databricks SQL REST API):**
+```typescript
+// lib/lakehouse-reader.ts
+const DATABRICKS_HOST = process.env.DATABRICKS_HOST!
+const DATABRICKS_TOKEN = process.env.DATABRICKS_TOKEN!
+const WAREHOUSE_ID = process.env.DATABRICKS_SQL_WAREHOUSE_ID!
+
+export async function readSyncTable(fullTableName: string, limit = 1000): Promise<Record<string, unknown>[]> {
+  const res = await fetch(
+    `https://${DATABRICKS_HOST}/api/2.0/sql/statements`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${DATABRICKS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        warehouse_id: WAREHOUSE_ID,
+        statement: `SELECT * FROM ${fullTableName} LIMIT ${limit}`,
+        wait_timeout: '30s',
+      }),
+    }
+  )
+  const data = await res.json()
+  const cols = data.manifest.schema.columns.map((c: { name: string }) => c.name)
+  return data.result.data_array.map((row: string[]) =>
+    Object.fromEntries(cols.map((col: string, i: number) => [col, row[i]]))
+  )
+}
+```
+
+4. Add required environment variables:
+
+```bash
+# .env — add these for Lakehouse sync table access
+DATABRICKS_HOST=<workspace>.cloud.databricks.com
+DATABRICKS_TOKEN=<pat-or-m2m-token>
+DATABRICKS_SQL_WAREHOUSE_PATH=/sql/1.0/warehouses/<warehouse-id>  # Python
+DATABRICKS_SQL_WAREHOUSE_ID=<warehouse-id>                         # TypeScript REST
+```
+
+5. Update `.env.example` with the new vars (placeholders only).
+
+**If user says no or not sure:** Skip to Step 2.
+
+---
+
+### Step 2 — Web Deployment Verification
+
+After all code changes (migration + optional sync table connection), confirm the
+user has deployed and configured their production environment.
+
+Ask:
+
+> "Final check — have you:
+>
+> 1. **Pushed your code** to your web deployment? (e.g. `git push` → Vercel/Netlify/Databricks Apps/AWS/RabbitDeploy)
+> 2. **Updated your production environment variables?**
+>    - Lakebase connection vars (`LAKEBASE_HOST`, `LAKEBASE_TOKEN`, etc.)
+>    - Sync table vars (if applicable: `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_SQL_WAREHOUSE_ID`)
+>    - Removed old database vars from production config
+>
+> Both are needed for the migration to be live in production."
+
+**If user confirms both:**
+
+> "Great — now please check your live app to make sure everything is working:
+>
+> 1. Open your deployed app in the browser
+> 2. Test a **read** operation (e.g. load a list page — does data appear?)
+> 3. Test a **write** operation (e.g. create/update a record — does it save?)
+> 4. [If sync tables] Check any analytics/dashboard features that read from sync tables
+>
+> Is everything working as expected?"
+
+**If user confirms app is working:**
+
+> "Migration is fully deployed and verified. Your app is:
+> - Reading/writing from **Lakebase** (OLTP)
+> - [If sync tables] Reading analytics from **Lakehouse sync tables**
+> - Data automatically syncs from Lakebase → Lakehouse for your medallion pipeline
+>
+> You're all set. Need help with anything else?"
+
+**If user reports issues:** Diagnose based on the symptom:
+- Data not loading → check env vars are correct in production, app restarted
+- Write failing → check token permissions, connection string
+- Sync tables empty → confirm admin has run the sync job, check warehouse is running
+
+**If user hasn't pushed or updated env vars:**
+
+Guide them through whichever step is missing:
+- If not pushed: offer to help commit and push their code:
+  > "Would you like me to help push your changes? I can commit the migration files and push to your remote."
+  If yes, run `git add` (relevant files only), `git commit`, and `git push` for them.
+- If env vars not updated: guide them to their hosting platform's env var settings
+  (Vercel → Settings → Environment Variables, Databricks Apps → app.yaml secrets,
+  RabbitDeploy → dashboard env config, etc.)
+
+**If user is unsure about env vars:** List exactly which vars need to be set in
+production based on the `.env` file generated during this integration:
+
+```bash
+# Required in production:
+LAKEBASE_HOST=...
+LAKEBASE_DATABASE=...
+# ... (list all vars from .env that are Lakebase/Databricks related)
+```
+
+---
+
 ## Phase 5 — Data Patterns
 
 ### Route by Connection Method
